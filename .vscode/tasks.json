@@ -24,6 +24,21 @@
             "command": "${workspaceFolder}/build/Release/Game.exe",
             "dependsOn": "Build Release",
             "group": "test"
+        },
+        {
+            "label": "Git Sync",
+            "type": "shell",
+            "command": "git add -A; git commit -m '${input:commitMessage}'; git push",
+            "group": "none",
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "commitMessage",
+            "type": "promptString",
+            "description": "Enter commit message",
+            "default": "Update engine code"
         }
     ]
 }
