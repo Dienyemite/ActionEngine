@@ -1,0 +1,44 @@
+# Build outputs
+build/
+out/
+bin/
+lib/
+*.lib
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.obj
+*.o
+
+# IDE / Editor
+.vs/
+*.user
+*.suo
+*.sln.docstates
+.idea/
+*.swp
+*.swo
+*~
+
+# Compiled shaders (can be regenerated)
+shaders/compiled/*.spv
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Dependencies that should be downloaded
+# Uncomment if you want to exclude third_party from repo
+# third_party/
+
+# User-specific files
+*.local

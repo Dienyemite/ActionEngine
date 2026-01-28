@@ -1,0 +1,45 @@
+{
+  "prefab_name": "PrefabCube",
+  "version": 1,
+  "root":   {
+    "name": "PrefabCube",
+    "type": "Node3D",
+    "position": [0, 0, 0],
+    "rotation": [0, 0, 0],
+    "scale": [1, 1, 1],
+    "color": [0.8, 0.8, 0.8],
+    "visible": true,
+    "children": [
+      {
+        "name": "Cube",
+        "type": "Cube",
+        "position": [0, 1.27139, 0.00363217],
+        "rotation": [0, 0, 0],
+        "scale": [1, 1, 1],
+        "color": [0.8, 0.8, 0.8],
+        "visible": true,
+        "children": []
+      },
+      {
+        "name": "Sphere",
+        "type": "Sphere",
+        "position": [0.0560243, 0.74, 0],
+        "rotation": [0, 0, 0],
+        "scale": [1, 1, 1],
+        "color": [0.8, 0.8, 0.8],
+        "visible": true,
+        "children": []
+      },
+      {
+        "name": "Cube",
+        "type": "Cube",
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "scale": [1, 1, 1],
+        "color": [0.8, 0.8, 0.8],
+        "visible": true,
+        "children": []
+      }
+    ]
+  }
+}
