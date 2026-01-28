@@ -1,0 +1,14 @@
+{
+  "prefab_name": "CubeSphere",
+  "version": 1,
+  "root":   {
+    "name": "Big Cube",
+    "type": "Cube",
+    "position": [0, 0, 0],
+    "rotation": [0, 0, 0],
+    "scale": [1, 1, 1],
+    "color": [0.8, 0.8, 0.8],
+    "visible": true,
+    "children": []
+  }
+}
