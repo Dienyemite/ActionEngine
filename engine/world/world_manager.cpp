@@ -144,6 +144,11 @@ void WorldManager::UnloadChunk(ChunkCoord coord) {
     
     Chunk& chunk = it->second;
     
+    // Remove entities from index
+    for (Entity entity : chunk.entities) {
+        m_entity_to_chunk.erase(entity);
+    }
+    
     // TODO: Save modified chunk data
     
     m_memory_usage -= chunk.memory_usage;
@@ -162,36 +167,97 @@ void WorldManager::AddObject(const WorldObject& object) {
     
     chunk->objects.push_back(object);
     chunk->entities.push_back(object.entity);
+    
+    // Index entity for O(1) lookup
+    m_entity_to_chunk[object.entity] = coord;
 }
 
 void WorldManager::RemoveObject(Entity entity) {
-    for (auto& [coord, chunk] : m_chunks) {
-        auto obj_it = std::find_if(chunk.objects.begin(), chunk.objects.end(),
-                                    [entity](const WorldObject& o) { 
-                                        return o.entity == entity; 
-                                    });
-        
-        if (obj_it != chunk.objects.end()) {
-            chunk.objects.erase(obj_it);
-            
-            auto ent_it = std::find(chunk.entities.begin(), chunk.entities.end(), entity);
-            if (ent_it != chunk.entities.end()) {
-                chunk.entities.erase(ent_it);
-            }
-            return;
-        }
+    // O(1) lookup using entity index
+    auto it = m_entity_to_chunk.find(entity);
+    if (it == m_entity_to_chunk.end()) {
+        return;  // Entity not found
     }
+    
+    ChunkCoord coord = it->second;
+    Chunk* chunk = GetChunk(coord);
+    if (!chunk) {
+        m_entity_to_chunk.erase(it);
+        return;
+    }
+    
+    auto obj_it = std::find_if(chunk->objects.begin(), chunk->objects.end(),
+                                [entity](const WorldObject& o) { 
+                                    return o.entity == entity; 
+                                });
+    
+    if (obj_it != chunk->objects.end()) {
+        chunk->objects.erase(obj_it);
+    }
+    
+    auto ent_it = std::find(chunk->entities.begin(), chunk->entities.end(), entity);
+    if (ent_it != chunk->entities.end()) {
+        chunk->entities.erase(ent_it);
+    }
+    
+    m_entity_to_chunk.erase(it);
 }
 
 void WorldManager::UpdateObject(Entity entity, const vec3& position, const vec4& color) {
-    for (auto& [coord, chunk] : m_chunks) {
-        for (auto& obj : chunk.objects) {
+    // O(1) lookup using entity index
+    auto it = m_entity_to_chunk.find(entity);
+    if (it == m_entity_to_chunk.end()) {
+        return;  // Entity not found
+    }
+    
+    ChunkCoord old_coord = it->second;
+    ChunkCoord new_coord = WorldToChunk(position);
+    
+    Chunk* old_chunk = GetChunk(old_coord);
+    if (!old_chunk) {
+        m_entity_to_chunk.erase(it);
+        return;
+    }
+    
+    // Check if entity moved to a different chunk
+    if (new_coord == old_coord) {
+        // Same chunk - just update position/color
+        for (auto& obj : old_chunk->objects) {
             if (obj.entity == entity) {
                 obj.position = position;
                 obj.color = color;
-                // Update bounds based on new position
                 vec3 half_size = obj.bounds.extents();
                 obj.bounds = AABB(position - half_size, position + half_size);
+                return;
+            }
+        }
+    } else {
+        // Entity moved to different chunk - relocate it
+        for (auto obj_it = old_chunk->objects.begin(); obj_it != old_chunk->objects.end(); ++obj_it) {
+            if (obj_it->entity == entity) {
+                WorldObject obj = *obj_it;
+                obj.position = position;
+                obj.color = color;
+                vec3 half_size = obj.bounds.extents();
+                obj.bounds = AABB(position - half_size, position + half_size);
+                
+                // Remove from old chunk
+                old_chunk->objects.erase(obj_it);
+                auto ent_it = std::find(old_chunk->entities.begin(), old_chunk->entities.end(), entity);
+                if (ent_it != old_chunk->entities.end()) {
+                    old_chunk->entities.erase(ent_it);
+                }
+                
+                // Add to new chunk
+                Chunk* new_chunk = GetChunk(new_coord);
+                if (!new_chunk) {
+                    new_chunk = LoadChunk(new_coord);
+                }
+                new_chunk->objects.push_back(obj);
+                new_chunk->entities.push_back(entity);
+                
+                // Update index
+                m_entity_to_chunk[entity] = new_coord;
                 return;
             }
         }

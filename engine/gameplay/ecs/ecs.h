@@ -2,10 +2,10 @@
 
 #include "core/types.h"
 #include "core/containers/sparse_set.h"
-#include <unordered_map>
-#include <typeindex>
 #include <memory>
 #include <functional>
+#include <vector>
+#include <atomic>
 
 namespace action {
 
@@ -20,6 +20,21 @@ namespace action {
  * - Simple entity management
  * - System registration and execution
  */
+
+// Compile-time type ID generator (replaces slow std::type_index hash)
+class TypeIDGenerator {
+public:
+    template<typename T>
+    static u32 GetID() {
+        static const u32 id = s_next_id++;
+        return id;
+    }
+    
+    static u32 Count() { return s_next_id.load(); }
+    
+private:
+    static inline std::atomic<u32> s_next_id{0};
+};
 
 // Entity is just an ID
 using Entity = u32;
@@ -177,29 +192,32 @@ public:
 private:
     template<typename T>
     ComponentPool<T>* GetPool() {
-        auto it = m_pools.find(std::type_index(typeid(T)));
-        if (it != m_pools.end()) {
-            return static_cast<ComponentPool<T>*>(it->second.get());
+        const u32 id = TypeIDGenerator::GetID<T>();
+        if (id < m_pools.size() && m_pools[id]) {
+            return static_cast<ComponentPool<T>*>(m_pools[id].get());
         }
         return nullptr;
     }
     
     template<typename T>
     const ComponentPool<T>* GetPool() const {
-        auto it = m_pools.find(std::type_index(typeid(T)));
-        if (it != m_pools.end()) {
-            return static_cast<const ComponentPool<T>*>(it->second.get());
+        const u32 id = TypeIDGenerator::GetID<T>();
+        if (id < m_pools.size() && m_pools[id]) {
+            return static_cast<const ComponentPool<T>*>(m_pools[id].get());
         }
         return nullptr;
     }
     
     template<typename T>
     ComponentPool<T>* GetOrCreatePool() {
-        auto& pool = m_pools[std::type_index(typeid(T))];
-        if (!pool) {
-            pool = std::make_unique<ComponentPool<T>>();
+        const u32 id = TypeIDGenerator::GetID<T>();
+        if (id >= m_pools.size()) {
+            m_pools.resize(id + 1);
         }
-        return static_cast<ComponentPool<T>*>(pool.get());
+        if (!m_pools[id]) {
+            m_pools[id] = std::make_unique<ComponentPool<T>>();
+        }
+        return static_cast<ComponentPool<T>*>(m_pools[id].get());
     }
     
     // Entity storage
@@ -208,8 +226,8 @@ private:
     std::vector<u8> m_alive;  // u8 instead of bool for cache efficiency
     Entity m_next_entity = 0;
     
-    // Component pools
-    std::unordered_map<std::type_index, std::unique_ptr<IComponentPool>> m_pools;
+    // Component pools - vector indexed by compile-time type ID (faster than unordered_map)
+    std::vector<std::unique_ptr<IComponentPool>> m_pools;
     
     // Systems
     std::vector<std::unique_ptr<System>> m_systems;

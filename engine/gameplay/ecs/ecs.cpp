@@ -51,8 +51,10 @@ void ECS::DestroyEntity(Entity entity) {
     }
     
     // Remove all components
-    for (auto& [type, pool] : m_pools) {
-        pool->Remove(entity);
+    for (auto& pool : m_pools) {
+        if (pool) {
+            pool->Remove(entity);
+        }
     }
     
     m_alive[entity] = false;
