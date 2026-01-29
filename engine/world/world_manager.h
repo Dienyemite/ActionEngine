@@ -147,6 +147,9 @@ private:
     // Loaded chunks
     std::unordered_map<ChunkCoord, Chunk, ChunkCoordHash> m_chunks;
     
+    // Entity-to-Chunk index for O(1) lookup (instead of O(chunks * objects))
+    std::unordered_map<Entity, ChunkCoord> m_entity_to_chunk;
+    
     // Streaming queue (sorted by priority)
     std::vector<ChunkCoord> m_load_queue;
     std::vector<ChunkCoord> m_unload_queue;

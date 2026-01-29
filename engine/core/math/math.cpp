@@ -67,6 +67,32 @@ mat4 mat4::look_at(const vec3& eye, const vec3& target, const vec3& up) {
 mat4 mat4::operator*(const mat4& o) const {
     mat4 result;
     
+#ifdef __SSE__
+    // SSE-optimized 4x4 matrix multiply
+    // Each column of result = this * column of o
+    for (int c = 0; c < 4; ++c) {
+        __m128 col = _mm_loadu_ps(&o.columns[c].x);
+        
+        // Broadcast each component and multiply-add
+        __m128 x = _mm_shuffle_ps(col, col, _MM_SHUFFLE(0, 0, 0, 0));
+        __m128 y = _mm_shuffle_ps(col, col, _MM_SHUFFLE(1, 1, 1, 1));
+        __m128 z = _mm_shuffle_ps(col, col, _MM_SHUFFLE(2, 2, 2, 2));
+        __m128 w = _mm_shuffle_ps(col, col, _MM_SHUFFLE(3, 3, 3, 3));
+        
+        __m128 c0 = _mm_loadu_ps(&columns[0].x);
+        __m128 c1 = _mm_loadu_ps(&columns[1].x);
+        __m128 c2 = _mm_loadu_ps(&columns[2].x);
+        __m128 c3 = _mm_loadu_ps(&columns[3].x);
+        
+        __m128 res = _mm_add_ps(
+            _mm_add_ps(_mm_mul_ps(c0, x), _mm_mul_ps(c1, y)),
+            _mm_add_ps(_mm_mul_ps(c2, z), _mm_mul_ps(c3, w))
+        );
+        
+        _mm_storeu_ps(&result.columns[c].x, res);
+    }
+#else
+    // Scalar fallback
     for (int c = 0; c < 4; ++c) {
         for (int r = 0; r < 4; ++r) {
             float sum = 0.0f;
@@ -76,6 +102,7 @@ mat4 mat4::operator*(const mat4& o) const {
             (&result.columns[c].x)[r] = sum;
         }
     }
+#endif
     
     return result;
 }
