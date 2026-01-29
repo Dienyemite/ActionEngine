@@ -5,23 +5,32 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+
+// Assimp includes
+#include <assimp/Importer.hpp>
+#include <assimp/scene.h>
+#include <assimp/postprocess.h>
 
 namespace action {
 
 void AssetImporter::Initialize(AssetManager* assets) {
     m_assets = assets;
     LOG_INFO("AssetImporter initialized");
+    LOG_INFO("  Supported formats: .obj, .fbx, .gltf, .glb, .blend, .dae, .3ds, .stl, .ply");
 }
 
 bool AssetImporter::IsFormatSupported(const std::string& filepath) const {
     std::string ext = filepath.substr(filepath.find_last_of('.') + 1);
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
     
-    return ext == "obj" || ext == "gltf" || ext == "glb" || ext == "fbx";
+    // Formats enabled in our Assimp build
+    return ext == "obj" || ext == "fbx" || ext == "gltf" || ext == "glb" || 
+           ext == "blend" || ext == "dae" || ext == "3ds" || ext == "stl" || ext == "ply";
 }
 
 std::vector<std::string> AssetImporter::GetSupportedExtensions() const {
-    return {".obj", ".gltf", ".glb", ".fbx"};
+    return {".obj", ".fbx", ".gltf", ".glb", ".blend", ".dae", ".3ds", ".stl", ".ply"};
 }
 
 ImportResult AssetImporter::Import(const std::string& filepath, const ImportSettings& settings) {
@@ -39,24 +48,10 @@ ImportResult AssetImporter::Import(const std::string& filepath, const ImportSett
     }
     file.close();
     
-    // Determine format and import
-    std::string ext = filepath.substr(filepath.find_last_of('.') + 1);
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    
     ReportProgress(0.0f, "Loading " + filepath);
     
-    if (ext == "obj") {
-        result = ImportOBJ(filepath, settings);
-    } else if (ext == "gltf" || ext == "glb") {
-        result = ImportGLTF(filepath, settings);
-    } else if (ext == "fbx") {
-        result = ImportFBX(filepath, settings);
-    } else {
-        result.success = false;
-        result.error_message = "Unsupported format: " + ext;
-        LOG_ERROR("{}", result.error_message);
-        return result;
-    }
+    // Use Assimp for all formats
+    result = ImportWithAssimp(filepath, settings);
     
     if (result.success) {
         // Apply post-processing
@@ -80,194 +75,267 @@ ImportResult AssetImporter::Import(const std::string& filepath, const ImportSett
 }
 
 // ============================================================================
-// OBJ Importer (simple, no dependencies)
+// Assimp Importer - Universal format support
 // ============================================================================
 
-ImportResult AssetImporter::ImportOBJ(const std::string& filepath, const ImportSettings& settings) {
+ImportResult AssetImporter::ImportWithAssimp(const std::string& filepath, const ImportSettings& settings) {
     ImportResult result;
     
-    std::ifstream file(filepath);
-    if (!file.is_open()) {
-        result.success = false;
-        result.error_message = "Failed to open file: " + filepath;
-        return result;
-    }
+    Assimp::Importer importer;
     
-    std::vector<vec3> positions;
-    std::vector<vec3> normals;
-    std::vector<vec2> texcoords;
+    // Configure import flags based on settings
+    unsigned int flags = 
+        aiProcess_Triangulate |           // Triangulate all faces
+        aiProcess_GenSmoothNormals |      // Generate smooth normals if missing
+        aiProcess_CalcTangentSpace |      // Generate tangents for normal mapping
+        aiProcess_JoinIdenticalVertices | // Optimize vertex count
+        aiProcess_RemoveRedundantMaterials |
+        aiProcess_OptimizeMeshes |        // Reduce draw call count
+        aiProcess_ValidateDataStructure;
     
-    ImportedMesh current_mesh;
-    current_mesh.name = "Mesh";
-    
-    std::string line;
-    while (std::getline(file, line)) {
-        std::istringstream iss(line);
-        std::string prefix;
-        iss >> prefix;
-        
-        if (prefix == "v") {
-            vec3 pos;
-            iss >> pos.x >> pos.y >> pos.z;
-            positions.push_back(pos);
-        }
-        else if (prefix == "vn") {
-            vec3 norm;
-            iss >> norm.x >> norm.y >> norm.z;
-            normals.push_back(norm);
-        }
-        else if (prefix == "vt") {
-            vec2 tex;
-            iss >> tex.x >> tex.y;
-            texcoords.push_back(tex);
-        }
-        else if (prefix == "f") {
-            // Parse face - can be v, v/vt, v/vt/vn, or v//vn
-            std::vector<Vertex> face_verts;
-            std::string vertex_str;
-            
-            while (iss >> vertex_str) {
-                Vertex vert;
-                vert.color = vec3{1, 1, 1};
-                
-                // Parse v/vt/vn format
-                size_t pos1 = vertex_str.find('/');
-                size_t pos2 = vertex_str.find('/', pos1 + 1);
-                
-                int vi = 0, ti = 0, ni = 0;
-                
-                if (pos1 == std::string::npos) {
-                    // Just position
-                    vi = std::stoi(vertex_str);
-                } else if (pos2 == std::string::npos) {
-                    // v/vt
-                    vi = std::stoi(vertex_str.substr(0, pos1));
-                    if (pos1 + 1 < vertex_str.length()) {
-                        ti = std::stoi(vertex_str.substr(pos1 + 1));
-                    }
-                } else {
-                    // v/vt/vn or v//vn
-                    vi = std::stoi(vertex_str.substr(0, pos1));
-                    if (pos2 > pos1 + 1) {
-                        ti = std::stoi(vertex_str.substr(pos1 + 1, pos2 - pos1 - 1));
-                    }
-                    if (pos2 + 1 < vertex_str.length()) {
-                        ni = std::stoi(vertex_str.substr(pos2 + 1));
-                    }
-                }
-                
-                // OBJ indices are 1-based
-                if (vi > 0 && vi <= (int)positions.size()) {
-                    vert.position = positions[vi - 1];
-                }
-                if (ti > 0 && ti <= (int)texcoords.size()) {
-                    vert.uv = texcoords[ti - 1];
-                }
-                if (ni > 0 && ni <= (int)normals.size()) {
-                    vert.normal = normals[ni - 1];
-                }
-                
-                face_verts.push_back(vert);
-            }
-            
-            // Triangulate the face (assuming convex polygon)
-            for (size_t i = 2; i < face_verts.size(); i++) {
-                u32 base_index = (u32)current_mesh.vertices.size();
-                current_mesh.vertices.push_back(face_verts[0]);
-                current_mesh.vertices.push_back(face_verts[i - 1]);
-                current_mesh.vertices.push_back(face_verts[i]);
-                current_mesh.indices.push_back(base_index);
-                current_mesh.indices.push_back(base_index + 1);
-                current_mesh.indices.push_back(base_index + 2);
-            }
-        }
-        else if (prefix == "o" || prefix == "g") {
-            // Object or group name
-            std::string name;
-            iss >> name;
-            if (!current_mesh.vertices.empty()) {
-                // Save current mesh and start new one
-                result.scene.meshes.push_back(current_mesh);
-                current_mesh = ImportedMesh();
-            }
-            current_mesh.name = name;
-        }
-    }
-    
-    // Add the last mesh
-    if (!current_mesh.vertices.empty()) {
-        result.scene.meshes.push_back(current_mesh);
-    }
-    
-    // Generate normals if needed
-    if (settings.generate_normals && normals.empty()) {
-        for (auto& mesh : result.scene.meshes) {
-            GenerateNormals(mesh);
-        }
-    }
-    
-    // Apply settings
+    // Optional flags based on settings
     if (settings.flip_uvs) {
-        for (auto& mesh : result.scene.meshes) {
-            FlipUVs(mesh);
-        }
+        flags |= aiProcess_FlipUVs;       // Flip V for Vulkan coordinate system
     }
     
     if (settings.flip_winding) {
-        for (auto& mesh : result.scene.meshes) {
-            FlipWindingOrder(mesh);
+        flags |= aiProcess_FlipWindingOrder;
+    }
+    
+    // Apply axis conversion if needed (Blender Z-up to Y-up)
+    if (settings.source_up_axis == ImportSettings::UpAxis::Z) {
+        flags |= aiProcess_MakeLeftHanded;  // This helps with Z-up to Y-up
+    }
+    
+    ReportProgress(0.2f, "Parsing file...");
+    
+    const aiScene* scene = importer.ReadFile(filepath, flags);
+    
+    if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
+        result.success = false;
+        result.error_message = "Assimp error: " + std::string(importer.GetErrorString());
+        LOG_ERROR("{}", result.error_message);
+        return result;
+    }
+    
+    ReportProgress(0.4f, "Processing meshes...");
+    
+    // Extract materials first (meshes reference them by index)
+    if (settings.import_materials) {
+        ExtractMaterials(scene, result.scene, filepath);
+    }
+    
+    ReportProgress(0.5f, "Extracting geometry...");
+    
+    // Extract all meshes
+    for (unsigned int i = 0; i < scene->mNumMeshes; i++) {
+        aiMesh* mesh = scene->mMeshes[i];
+        ImportedMesh imported_mesh = ProcessMesh(mesh, scene, settings);
+        
+        // Apply scale if set
+        if (settings.scale != 1.0f) {
+            for (auto& vert : imported_mesh.vertices) {
+                vert.position.x *= settings.scale;
+                vert.position.y *= settings.scale;
+                vert.position.z *= settings.scale;
+            }
         }
+        
+        result.scene.meshes.push_back(imported_mesh);
+        result.scene.total_vertices += (u32)imported_mesh.vertices.size();
+        result.scene.total_triangles += (u32)imported_mesh.indices.size() / 3;
     }
     
-    // Calculate statistics
-    for (const auto& mesh : result.scene.meshes) {
-        result.scene.total_vertices += (u32)mesh.vertices.size();
-        result.scene.total_triangles += (u32)mesh.indices.size() / 3;
-    }
+    ReportProgress(0.7f, "Building node hierarchy...");
     
-    // Create root node
-    result.scene.root_node.name = "Root";
-    for (size_t i = 0; i < result.scene.meshes.size(); i++) {
-        result.scene.root_node.mesh_indices.push_back((i32)i);
-    }
+    // Process node hierarchy
+    ProcessNode(scene->mRootNode, scene, result.scene.root_node);
+    result.scene.total_nodes = CountNodes(result.scene.root_node);
     
     result.success = true;
     return result;
 }
 
-// ============================================================================
-// glTF Importer (basic implementation)
-// ============================================================================
+ImportedMesh AssetImporter::ProcessMesh(aiMesh* mesh, const aiScene* scene, const ImportSettings& settings) {
+    ImportedMesh imported_mesh;
+    imported_mesh.name = mesh->mName.C_Str();
+    imported_mesh.material_index = mesh->mMaterialIndex;
+    
+    // Reserve space
+    imported_mesh.vertices.reserve(mesh->mNumVertices);
+    imported_mesh.indices.reserve(mesh->mNumFaces * 3);
+    
+    // Extract vertices
+    for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
+        Vertex vert;
+        
+        // Position
+        vert.position.x = mesh->mVertices[i].x;
+        vert.position.y = mesh->mVertices[i].y;
+        vert.position.z = mesh->mVertices[i].z;
+        
+        // Normal
+        if (mesh->HasNormals()) {
+            vert.normal.x = mesh->mNormals[i].x;
+            vert.normal.y = mesh->mNormals[i].y;
+            vert.normal.z = mesh->mNormals[i].z;
+        } else {
+            vert.normal = vec3{0, 1, 0};
+        }
+        
+        // UV coordinates (use first UV channel)
+        if (mesh->mTextureCoords[0]) {
+            vert.uv.x = mesh->mTextureCoords[0][i].x;
+            vert.uv.y = mesh->mTextureCoords[0][i].y;
+        } else {
+            vert.uv = vec2{0, 0};
+        }
+        
+        // Vertex color (use first color channel)
+        if (mesh->mColors[0]) {
+            vert.color.x = mesh->mColors[0][i].r;
+            vert.color.y = mesh->mColors[0][i].g;
+            vert.color.z = mesh->mColors[0][i].b;
+        } else {
+            vert.color = vec3{1, 1, 1};
+        }
+        
+        imported_mesh.vertices.push_back(vert);
+    }
+    
+    // Extract indices
+    for (unsigned int i = 0; i < mesh->mNumFaces; i++) {
+        aiFace& face = mesh->mFaces[i];
+        // Should always be triangles due to aiProcess_Triangulate
+        for (unsigned int j = 0; j < face.mNumIndices; j++) {
+            imported_mesh.indices.push_back(face.mIndices[j]);
+        }
+    }
+    
+    return imported_mesh;
+}
 
-ImportResult AssetImporter::ImportGLTF(const std::string& filepath, const ImportSettings& settings) {
-    ImportResult result;
+void AssetImporter::ProcessNode(aiNode* node, const aiScene* scene, ImportedNode& out_node) {
+    out_node.name = node->mName.C_Str();
     
-    // TODO: Implement proper glTF parsing
-    // For now, just log and return error
-    // A full implementation would parse JSON and binary data
+    // Extract transform
+    aiMatrix4x4& m = node->mTransformation;
+    aiVector3D scaling, position;
+    aiQuaternion rotation;
+    m.Decompose(scaling, rotation, position);
     
-    result.success = false;
-    result.error_message = "glTF import not yet implemented - use OBJ for now";
-    LOG_WARN("{}", result.error_message);
+    out_node.position = vec3{position.x, position.y, position.z};
+    out_node.rotation = quat{rotation.x, rotation.y, rotation.z, rotation.w};
+    out_node.scale = vec3{scaling.x, scaling.y, scaling.z};
     
-    return result;
+    // Add mesh references
+    for (unsigned int i = 0; i < node->mNumMeshes; i++) {
+        out_node.mesh_indices.push_back((i32)node->mMeshes[i]);
+    }
+    
+    // Process children
+    out_node.children.resize(node->mNumChildren);
+    for (unsigned int i = 0; i < node->mNumChildren; i++) {
+        ProcessNode(node->mChildren[i], scene, out_node.children[i]);
+    }
+}
+
+void AssetImporter::ExtractMaterials(const aiScene* scene, ImportedScene& out_scene, const std::string& model_path) {
+    std::filesystem::path model_dir = std::filesystem::path(model_path).parent_path();
+    
+    for (unsigned int i = 0; i < scene->mNumMaterials; i++) {
+        aiMaterial* material = scene->mMaterials[i];
+        ImportedMaterial imported_mat;
+        
+        // Material name
+        aiString name;
+        if (material->Get(AI_MATKEY_NAME, name) == AI_SUCCESS) {
+            imported_mat.name = name.C_Str();
+        } else {
+            imported_mat.name = "Material_" + std::to_string(i);
+        }
+        
+        // Diffuse color
+        aiColor4D diffuse;
+        if (material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse) == AI_SUCCESS) {
+            imported_mat.diffuse_color = vec3{diffuse.r, diffuse.g, diffuse.b};
+        }
+        
+        // Specular color
+        aiColor4D specular;
+        if (material->Get(AI_MATKEY_COLOR_SPECULAR, specular) == AI_SUCCESS) {
+            imported_mat.specular_color = vec3{specular.r, specular.g, specular.b};
+        }
+        
+        // Roughness/Shininess
+        float shininess;
+        if (material->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS) {
+            // Convert shininess to roughness (inverse relationship)
+            imported_mat.roughness = 1.0f - std::min(shininess / 1000.0f, 1.0f);
+        }
+        
+        // Opacity
+        float opacity;
+        if (material->Get(AI_MATKEY_OPACITY, opacity) == AI_SUCCESS) {
+            imported_mat.opacity = opacity;
+        }
+        
+        // Diffuse texture
+        if (material->GetTextureCount(aiTextureType_DIFFUSE) > 0) {
+            aiString texPath;
+            material->GetTexture(aiTextureType_DIFFUSE, 0, &texPath);
+            imported_mat.diffuse_texture = (model_dir / texPath.C_Str()).string();
+        }
+        
+        // Normal map
+        if (material->GetTextureCount(aiTextureType_NORMALS) > 0) {
+            aiString texPath;
+            material->GetTexture(aiTextureType_NORMALS, 0, &texPath);
+            imported_mat.normal_texture = (model_dir / texPath.C_Str()).string();
+        } else if (material->GetTextureCount(aiTextureType_HEIGHT) > 0) {
+            // Some formats use HEIGHT for normal maps
+            aiString texPath;
+            material->GetTexture(aiTextureType_HEIGHT, 0, &texPath);
+            imported_mat.normal_texture = (model_dir / texPath.C_Str()).string();
+        }
+        
+        // PBR metallic-roughness (glTF 2.0 style)
+        float metallic;
+        if (material->Get(AI_MATKEY_METALLIC_FACTOR, metallic) == AI_SUCCESS) {
+            imported_mat.metallic = metallic;
+        }
+        
+        float roughness;
+        if (material->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness) == AI_SUCCESS) {
+            imported_mat.roughness = roughness;
+        }
+        
+        out_scene.materials.push_back(imported_mat);
+    }
+}
+
+u32 AssetImporter::CountNodes(const ImportedNode& node) {
+    u32 count = 1;
+    for (const auto& child : node.children) {
+        count += CountNodes(child);
+    }
+    return count;
 }
 
 // ============================================================================
-// FBX Importer (basic implementation)
+// Legacy importers - now redirect to Assimp
 // ============================================================================
 
+ImportResult AssetImporter::ImportOBJ(const std::string& filepath, const ImportSettings& settings) {
+    return ImportWithAssimp(filepath, settings);
+}
+
+ImportResult AssetImporter::ImportGLTF(const std::string& filepath, const ImportSettings& settings) {
+    return ImportWithAssimp(filepath, settings);
+}
+
 ImportResult AssetImporter::ImportFBX(const std::string& filepath, const ImportSettings& settings) {
-    ImportResult result;
-    
-    // TODO: Implement FBX parsing
-    // FBX is a complex binary format, would need a library like OpenFBX
-    
-    result.success = false;
-    result.error_message = "FBX import not yet implemented - use OBJ for now";
-    LOG_WARN("{}", result.error_message);
-    
-    return result;
+    return ImportWithAssimp(filepath, settings);
 }
 
 // ============================================================================
@@ -275,22 +343,14 @@ ImportResult AssetImporter::ImportFBX(const std::string& filepath, const ImportS
 // ============================================================================
 
 void AssetImporter::ApplyTransform(ImportedScene& scene, const ImportSettings& settings) {
-    // Apply scale
-    if (settings.scale != 1.0f) {
-        for (auto& mesh : scene.meshes) {
-            for (auto& vert : mesh.vertices) {
-                vert.position.x *= settings.scale;
-                vert.position.y *= settings.scale;
-                vert.position.z *= settings.scale;
-            }
-        }
-    }
+    // Note: Scale and axis conversion now handled by Assimp or ProcessMesh
+    // This function kept for any additional post-processing needed
     
-    // Apply axis conversion (Z-up to Y-up)
+    // Apply axis conversion (Z-up to Y-up) if Assimp didn't fully handle it
     if (settings.source_up_axis == ImportSettings::UpAxis::Z) {
         for (auto& mesh : scene.meshes) {
             for (auto& vert : mesh.vertices) {
-                // Rotate -90 degrees around X axis
+                // Rotate -90 degrees around X axis (swap Y and Z, negate new Z)
                 float y = vert.position.y;
                 float z = vert.position.z;
                 vert.position.y = z;
@@ -320,7 +380,7 @@ void AssetImporter::CalculateBounds(ImportedScene& scene) {
 }
 
 void AssetImporter::GenerateNormals(ImportedMesh& mesh) {
-    // Calculate face normals and average them per vertex
+    // Note: Assimp handles this with aiProcess_GenSmoothNormals
     std::vector<vec3> vertex_normals(mesh.vertices.size(), vec3{0, 0, 0});
     
     for (size_t i = 0; i < mesh.indices.size(); i += 3) {
@@ -341,14 +401,13 @@ void AssetImporter::GenerateNormals(ImportedMesh& mesh) {
         vertex_normals[i2] = vertex_normals[i2] + face_normal;
     }
     
-    // Normalize
     for (size_t i = 0; i < mesh.vertices.size(); i++) {
         mesh.vertices[i].normal = vertex_normals[i].normalized();
     }
 }
 
 void AssetImporter::GenerateTangents(ImportedMesh& mesh) {
-    // TODO: Implement Mikktspace tangent generation
+    // Note: Assimp handles this with aiProcess_CalcTangentSpace
 }
 
 void AssetImporter::FlipWindingOrder(ImportedMesh& mesh) {
