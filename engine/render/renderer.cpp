@@ -110,7 +110,12 @@ bool Renderer::Initialize(const RendererConfig& config) {
         return false;
     }
     
-    // Create FXAA resources (needs descriptor pool to be created first)
+    // Create MSAA resources (multisampling images)
+    if (!CreateMSAAResources()) {
+        return false;
+    }
+    
+    // Create FXAA resources (needs descriptor pool and MSAA to be created first)
     if (!CreateFXAAResources()) {
         return false;
     }
@@ -182,6 +187,9 @@ void Renderer::Shutdown() {
     for (auto fb : m_fxaa_framebuffers) {
         vkDestroyFramebuffer(device, fb, nullptr);
     }
+    
+    // Destroy MSAA resources
+    DestroyMSAAResources();
     
     // Destroy FXAA resources
     DestroyFXAAResources();
@@ -380,7 +388,10 @@ void Renderer::OnResize(u32 width, u32 height) {
     }
     m_fxaa_framebuffers.clear();
     
-    // Destroy FXAA resources (they're resolution-dependent)
+    // Destroy MSAA resources (resolution-dependent)
+    DestroyMSAAResources();
+    
+    // Destroy FXAA resources (resolution-dependent)
     DestroyFXAAResources();
     
     // Destroy old per-image semaphores (image count might change)
@@ -393,6 +404,9 @@ void Renderer::OnResize(u32 width, u32 height) {
     
     // Recreate swapchain
     m_swapchain.Recreate(m_context, width, height);
+    
+    // Recreate MSAA resources with new resolution
+    CreateMSAAResources();
     
     // Recreate FXAA resources with new resolution
     CreateFXAAResources();
@@ -417,26 +431,42 @@ void Renderer::OnResize(u32 width, u32 height) {
 bool Renderer::CreateRenderPasses() {
     VkDevice device = m_context.GetDevice();
     
-    // Forward render pass (renders to offscreen texture for FXAA)
-    VkAttachmentDescription color_attachment{};
-    color_attachment.format = m_swapchain.GetFormat();
-    color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    color_attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;  // For FXAA sampling
+    // Get MSAA sample count first
+    m_msaa_samples = GetMaxUsableSampleCount();
     
-    VkAttachmentDescription depth_attachment{};
-    depth_attachment.format = m_swapchain.GetDepthFormat();
-    depth_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depth_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    depth_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depth_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    depth_attachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    // Forward render pass with MSAA
+    // Attachment 0: MSAA color (multisampled, renders here)
+    VkAttachmentDescription msaa_color_attachment{};
+    msaa_color_attachment.format = m_swapchain.GetFormat();
+    msaa_color_attachment.samples = m_msaa_samples;
+    msaa_color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    msaa_color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;  // MSAA samples discarded after resolve
+    msaa_color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    msaa_color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    msaa_color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    msaa_color_attachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    
+    // Attachment 1: MSAA depth (multisampled)
+    VkAttachmentDescription msaa_depth_attachment{};
+    msaa_depth_attachment.format = m_swapchain.GetDepthFormat();
+    msaa_depth_attachment.samples = m_msaa_samples;
+    msaa_depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    msaa_depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    msaa_depth_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    msaa_depth_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    msaa_depth_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    msaa_depth_attachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    
+    // Attachment 2: Resolve target (single-sampled, for FXAA input)
+    VkAttachmentDescription resolve_attachment{};
+    resolve_attachment.format = m_swapchain.GetFormat();
+    resolve_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    resolve_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    resolve_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    resolve_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    resolve_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    resolve_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    resolve_attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;  // For FXAA sampling
     
     VkAttachmentReference color_ref{};
     color_ref.attachment = 0;
@@ -446,11 +476,16 @@ bool Renderer::CreateRenderPasses() {
     depth_ref.attachment = 1;
     depth_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     
+    VkAttachmentReference resolve_ref{};
+    resolve_ref.attachment = 2;
+    resolve_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &color_ref;
     subpass.pDepthStencilAttachment = &depth_ref;
+    subpass.pResolveAttachments = &resolve_ref;  // MSAA resolve
     
     VkSubpassDependency dependency{};
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
@@ -463,7 +498,7 @@ bool Renderer::CreateRenderPasses() {
     dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | 
                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     
-    std::array<VkAttachmentDescription, 2> attachments = {color_attachment, depth_attachment};
+    std::array<VkAttachmentDescription, 3> attachments = {msaa_color_attachment, msaa_depth_attachment, resolve_attachment};
     
     VkRenderPassCreateInfo render_pass_info{};
     render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -478,6 +513,8 @@ bool Renderer::CreateRenderPasses() {
         LOG_ERROR("Failed to create forward render pass");
         return false;
     }
+    
+    LOG_INFO("Created forward render pass with {}x MSAA", static_cast<int>(m_msaa_samples));
     
     // FXAA render pass (outputs to swapchain)
     VkAttachmentDescription fxaa_color{};
@@ -530,12 +567,14 @@ bool Renderer::CreateFramebuffers() {
     VkExtent2D extent = m_swapchain.GetExtent();
     u32 image_count = m_swapchain.GetImageCount();
     
-    // Scene framebuffers (render to offscreen texture)
+    // Scene framebuffers with MSAA
+    // Attachments: 0=MSAA color, 1=MSAA depth, 2=resolve target (for FXAA)
     m_scene_framebuffers.resize(image_count);
     for (size_t i = 0; i < image_count; ++i) {
-        std::array<VkImageView, 2> attachments = {
-            m_scene_image_view,  // Offscreen render target
-            m_swapchain.GetDepthImageView()
+        std::array<VkImageView, 3> attachments = {
+            m_msaa_color_view,   // MSAA color attachment
+            m_msaa_depth_view,   // MSAA depth attachment
+            m_scene_image_view   // Resolve target (single-sampled, for FXAA)
         };
         
         VkFramebufferCreateInfo fb_info{};
@@ -931,8 +970,9 @@ bool Renderer::CreatePipelines() {
     // Multisampling
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.sampleShadingEnable = VK_FALSE;
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisampling.sampleShadingEnable = VK_TRUE;  // Enable sample shading for better quality
+    multisampling.minSampleShading = 0.25f;       // 25% of samples get unique shading
+    multisampling.rasterizationSamples = m_msaa_samples;
     
     // Depth stencil
     VkPipelineDepthStencilStateCreateInfo depth_stencil{};
@@ -1071,7 +1111,7 @@ bool Renderer::CreatePipelines() {
     VkPipelineMultisampleStateCreateInfo skybox_multisampling{};
     skybox_multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     skybox_multisampling.sampleShadingEnable = VK_FALSE;
-    skybox_multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    skybox_multisampling.rasterizationSamples = m_msaa_samples;
     
     // Depth - test but don't write (skybox is behind everything)
     VkPipelineDepthStencilStateCreateInfo skybox_depth{};
@@ -1183,7 +1223,7 @@ bool Renderer::CreatePipelines() {
         VkPipelineMultisampleStateCreateInfo grid_multisampling{};
         grid_multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
         grid_multisampling.sampleShadingEnable = VK_FALSE;
-        grid_multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        grid_multisampling.rasterizationSamples = m_msaa_samples;
         
         // Depth test enabled, write enabled (for proper occlusion)
         VkPipelineDepthStencilStateCreateInfo grid_depth{};
@@ -1368,6 +1408,169 @@ bool Renderer::CreatePipelines() {
     }
     
     return true;
+}
+
+VkSampleCountFlagBits Renderer::GetMaxUsableSampleCount() {
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(m_context.GetPhysicalDevice(), &props);
+    
+    VkSampleCountFlags counts = props.limits.framebufferColorSampleCounts &
+                                 props.limits.framebufferDepthSampleCounts;
+    
+    // Prefer 4x MSAA for good quality/performance balance
+    if (counts & VK_SAMPLE_COUNT_4_BIT) return VK_SAMPLE_COUNT_4_BIT;
+    if (counts & VK_SAMPLE_COUNT_2_BIT) return VK_SAMPLE_COUNT_2_BIT;
+    
+    return VK_SAMPLE_COUNT_1_BIT;
+}
+
+bool Renderer::CreateMSAAResources() {
+    VkDevice device = m_context.GetDevice();
+    VkExtent2D extent = m_swapchain.GetExtent();
+    
+    // Get supported MSAA sample count
+    m_msaa_samples = GetMaxUsableSampleCount();
+    LOG_INFO("MSAA enabled: {}x", static_cast<int>(m_msaa_samples));
+    
+    if (m_msaa_samples == VK_SAMPLE_COUNT_1_BIT) {
+        LOG_WARN("MSAA not supported on this device");
+        return true; // Continue without MSAA
+    }
+    
+    // Create MSAA color image
+    VkImageCreateInfo color_info{};
+    color_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    color_info.imageType = VK_IMAGE_TYPE_2D;
+    color_info.format = m_swapchain.GetFormat();
+    color_info.extent = {extent.width, extent.height, 1};
+    color_info.mipLevels = 1;
+    color_info.arrayLayers = 1;
+    color_info.samples = m_msaa_samples;
+    color_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    color_info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+    color_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    color_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    
+    if (vkCreateImage(device, &color_info, nullptr, &m_msaa_color_image) != VK_SUCCESS) {
+        LOG_ERROR("Failed to create MSAA color image");
+        return false;
+    }
+    
+    // Allocate memory for MSAA color
+    VkMemoryRequirements color_reqs;
+    vkGetImageMemoryRequirements(device, m_msaa_color_image, &color_reqs);
+    
+    VkMemoryAllocateInfo color_alloc{};
+    color_alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    color_alloc.allocationSize = color_reqs.size;
+    color_alloc.memoryTypeIndex = m_context.FindMemoryType(color_reqs.memoryTypeBits,
+                                                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    
+    if (vkAllocateMemory(device, &color_alloc, nullptr, &m_msaa_color_memory) != VK_SUCCESS) {
+        LOG_ERROR("Failed to allocate MSAA color memory");
+        return false;
+    }
+    vkBindImageMemory(device, m_msaa_color_image, m_msaa_color_memory, 0);
+    
+    // Create MSAA color view
+    VkImageViewCreateInfo color_view_info{};
+    color_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    color_view_info.image = m_msaa_color_image;
+    color_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    color_view_info.format = m_swapchain.GetFormat();
+    color_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    color_view_info.subresourceRange.baseMipLevel = 0;
+    color_view_info.subresourceRange.levelCount = 1;
+    color_view_info.subresourceRange.baseArrayLayer = 0;
+    color_view_info.subresourceRange.layerCount = 1;
+    
+    if (vkCreateImageView(device, &color_view_info, nullptr, &m_msaa_color_view) != VK_SUCCESS) {
+        LOG_ERROR("Failed to create MSAA color view");
+        return false;
+    }
+    
+    // Create MSAA depth image
+    VkImageCreateInfo depth_info{};
+    depth_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    depth_info.imageType = VK_IMAGE_TYPE_2D;
+    depth_info.format = m_swapchain.GetDepthFormat();
+    depth_info.extent = {extent.width, extent.height, 1};
+    depth_info.mipLevels = 1;
+    depth_info.arrayLayers = 1;
+    depth_info.samples = m_msaa_samples;
+    depth_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    depth_info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+    depth_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    depth_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    
+    if (vkCreateImage(device, &depth_info, nullptr, &m_msaa_depth_image) != VK_SUCCESS) {
+        LOG_ERROR("Failed to create MSAA depth image");
+        return false;
+    }
+    
+    // Allocate memory for MSAA depth
+    VkMemoryRequirements depth_reqs;
+    vkGetImageMemoryRequirements(device, m_msaa_depth_image, &depth_reqs);
+    
+    VkMemoryAllocateInfo depth_alloc{};
+    depth_alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    depth_alloc.allocationSize = depth_reqs.size;
+    depth_alloc.memoryTypeIndex = m_context.FindMemoryType(depth_reqs.memoryTypeBits,
+                                                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    
+    if (vkAllocateMemory(device, &depth_alloc, nullptr, &m_msaa_depth_memory) != VK_SUCCESS) {
+        LOG_ERROR("Failed to allocate MSAA depth memory");
+        return false;
+    }
+    vkBindImageMemory(device, m_msaa_depth_image, m_msaa_depth_memory, 0);
+    
+    // Create MSAA depth view
+    VkImageViewCreateInfo depth_view_info{};
+    depth_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    depth_view_info.image = m_msaa_depth_image;
+    depth_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    depth_view_info.format = m_swapchain.GetDepthFormat();
+    depth_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    depth_view_info.subresourceRange.baseMipLevel = 0;
+    depth_view_info.subresourceRange.levelCount = 1;
+    depth_view_info.subresourceRange.baseArrayLayer = 0;
+    depth_view_info.subresourceRange.layerCount = 1;
+    
+    if (vkCreateImageView(device, &depth_view_info, nullptr, &m_msaa_depth_view) != VK_SUCCESS) {
+        LOG_ERROR("Failed to create MSAA depth view");
+        return false;
+    }
+    
+    return true;
+}
+
+void Renderer::DestroyMSAAResources() {
+    VkDevice device = m_context.GetDevice();
+    
+    if (m_msaa_depth_view != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, m_msaa_depth_view, nullptr);
+        m_msaa_depth_view = VK_NULL_HANDLE;
+    }
+    if (m_msaa_depth_image != VK_NULL_HANDLE) {
+        vkDestroyImage(device, m_msaa_depth_image, nullptr);
+        m_msaa_depth_image = VK_NULL_HANDLE;
+    }
+    if (m_msaa_depth_memory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, m_msaa_depth_memory, nullptr);
+        m_msaa_depth_memory = VK_NULL_HANDLE;
+    }
+    if (m_msaa_color_view != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, m_msaa_color_view, nullptr);
+        m_msaa_color_view = VK_NULL_HANDLE;
+    }
+    if (m_msaa_color_image != VK_NULL_HANDLE) {
+        vkDestroyImage(device, m_msaa_color_image, nullptr);
+        m_msaa_color_image = VK_NULL_HANDLE;
+    }
+    if (m_msaa_color_memory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, m_msaa_color_memory, nullptr);
+        m_msaa_color_memory = VK_NULL_HANDLE;
+    }
 }
 
 bool Renderer::CreateFXAAResources() {
@@ -1836,8 +2039,8 @@ void Renderer::RecordCommandBuffer(u32 image_index, const RenderList& render_lis
         
         fxaa_params.texelSizeX = 1.0f / static_cast<float>(m_swapchain.GetExtent().width);
         fxaa_params.texelSizeY = 1.0f / static_cast<float>(m_swapchain.GetExtent().height);
-        fxaa_params.qualitySubpix = 0.75f;
-        fxaa_params.qualityEdgeThreshold = 0.166f;
+        fxaa_params.qualitySubpix = 1.0f;     // Maximum sub-pixel AA (was 0.75)
+        fxaa_params.qualityEdgeThreshold = 0.063f;  // More aggressive edge detection (was 0.166)
         
         vkCmdPushConstants(cmd, m_fxaa_pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(FXAAParams), &fxaa_params);

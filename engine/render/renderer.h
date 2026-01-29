@@ -178,6 +178,11 @@ private:
     bool CreateDescriptorSets();
     bool CreateUniformBuffers();
     
+    // MSAA helpers
+    VkSampleCountFlagBits GetMaxUsableSampleCount();
+    bool CreateMSAAResources();
+    void DestroyMSAAResources();
+    
     // Shader loading
     VkShaderModule LoadShaderModule(const std::string& path);
     
@@ -224,11 +229,20 @@ private:
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_fxaa_descriptor_sets;
     VkSampler m_scene_sampler = VK_NULL_HANDLE;
     
-    // Offscreen scene render target (for FXAA input)
+    // MSAA (4x Multisample Anti-Aliasing)
+    VkSampleCountFlagBits m_msaa_samples = VK_SAMPLE_COUNT_4_BIT;
+    VkImage m_msaa_color_image = VK_NULL_HANDLE;
+    VkDeviceMemory m_msaa_color_memory = VK_NULL_HANDLE;
+    VkImageView m_msaa_color_view = VK_NULL_HANDLE;
+    VkImage m_msaa_depth_image = VK_NULL_HANDLE;
+    VkDeviceMemory m_msaa_depth_memory = VK_NULL_HANDLE;
+    VkImageView m_msaa_depth_view = VK_NULL_HANDLE;
+    
+    // Offscreen scene render target (resolved from MSAA, for FXAA input)
     VkImage m_scene_image = VK_NULL_HANDLE;
     VkDeviceMemory m_scene_image_memory = VK_NULL_HANDLE;
     VkImageView m_scene_image_view = VK_NULL_HANDLE;
-    std::vector<VkFramebuffer> m_scene_framebuffers;  // Scene renders here
+    std::vector<VkFramebuffer> m_scene_framebuffers;  // Scene renders here (MSAA)
     std::vector<VkFramebuffer> m_fxaa_framebuffers;   // FXAA outputs to swapchain
     bool m_fxaa_enabled = true;  // FXAA on by default
     

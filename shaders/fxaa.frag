@@ -122,9 +122,9 @@ void main() {
     bool reachedBoth = reached1 && reached2;
     
     // Continue exploring if we haven't found the edge endpoints
-    // Quality: 5 iterations (good balance)
-    const int ITERATIONS = 5;
-    const float QUALITY[5] = float[](1.5, 2.0, 2.0, 2.0, 4.0);
+    // Quality: 12 iterations (high quality - smooth edges)
+    const int ITERATIONS = 12;
+    const float QUALITY[12] = float[](1.0, 1.0, 1.0, 1.0, 1.0, 1.5, 2.0, 2.0, 2.0, 2.0, 4.0, 8.0);
     
     for (int i = 0; i < ITERATIONS && !reachedBoth; i++) {
         if (!reached1) {
