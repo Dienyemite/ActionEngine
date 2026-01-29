@@ -148,14 +148,19 @@ public:
     void SetGridVisible(bool visible) { m_show_grid = visible; }
     bool IsGridVisible() const { return m_show_grid; }
     
+    // Anti-aliasing
+    void SetFXAAEnabled(bool enabled) { m_fxaa_enabled = enabled; }
+    bool IsFXAAEnabled() const { return m_fxaa_enabled; }
+    
     // Resize handling
     void OnResize(u32 width, u32 height);
     
     // Access to Vulkan context (for asset loading)
     VulkanContext& GetContext() { return m_context; }
     
-    // Access to render pass (for ImGui)
+    // Access to render passes (for ImGui and other rendering)
     VkRenderPass GetForwardPass() const { return m_forward_pass; }
+    VkRenderPass GetFXAAPass() const { return m_fxaa_pass; }
     
     // Get current command buffer (for editor UI rendering)
     VkCommandBuffer GetCurrentCommandBuffer() const { return m_command_buffers[m_current_frame]; }
@@ -211,6 +216,22 @@ private:
     // Synchronization (triple buffering)
     static constexpr u32 MAX_FRAMES_IN_FLIGHT = 3;
     
+    // FXAA Anti-Aliasing
+    VkRenderPass m_fxaa_pass = VK_NULL_HANDLE;
+    VkPipelineLayout m_fxaa_pipeline_layout = VK_NULL_HANDLE;
+    VkPipeline m_fxaa_pipeline = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_fxaa_set_layout = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_fxaa_descriptor_sets;
+    VkSampler m_scene_sampler = VK_NULL_HANDLE;
+    
+    // Offscreen scene render target (for FXAA input)
+    VkImage m_scene_image = VK_NULL_HANDLE;
+    VkDeviceMemory m_scene_image_memory = VK_NULL_HANDLE;
+    VkImageView m_scene_image_view = VK_NULL_HANDLE;
+    std::vector<VkFramebuffer> m_scene_framebuffers;  // Scene renders here
+    std::vector<VkFramebuffer> m_fxaa_framebuffers;   // FXAA outputs to swapchain
+    bool m_fxaa_enabled = true;  // FXAA on by default
+    
     // Descriptors
     VkDescriptorSetLayout m_global_set_layout = VK_NULL_HANDLE;
     VkDescriptorPool m_descriptor_pool = VK_NULL_HANDLE;
@@ -235,9 +256,8 @@ private:
     VkDeviceMemory m_test_index_memory = VK_NULL_HANDLE;
     u32 m_test_index_count = 0;
     bool CreateTestMesh();
-    
-    // Framebuffers
-    std::vector<VkFramebuffer> m_framebuffers;
+    bool CreateFXAAResources();
+    void DestroyFXAAResources();
     
     // Command buffers
     VkCommandPool m_command_pool = VK_NULL_HANDLE;
