@@ -8,6 +8,11 @@
 #include <memory>
 #include <functional>
 
+// Forward declarations for Assimp types
+struct aiNode;
+struct aiScene;
+struct aiMesh;
+
 namespace action {
 
 /*
@@ -152,6 +157,13 @@ private:
     ImportResult ImportGLTF(const std::string& filepath, const ImportSettings& settings);
     ImportResult ImportOBJ(const std::string& filepath, const ImportSettings& settings);
     ImportResult ImportFBX(const std::string& filepath, const ImportSettings& settings);
+    
+    // Assimp-based universal importer
+    ImportResult ImportWithAssimp(const std::string& filepath, const ImportSettings& settings);
+    ImportedMesh ProcessMesh(aiMesh* mesh, const aiScene* scene, const ImportSettings& settings);
+    void ProcessNode(aiNode* node, const aiScene* scene, ImportedNode& out_node);
+    void ExtractMaterials(const aiScene* scene, ImportedScene& out_scene, const std::string& model_path);
+    u32 CountNodes(const ImportedNode& node);
     
     // Helper functions
     void ApplyTransform(ImportedScene& scene, const ImportSettings& settings);

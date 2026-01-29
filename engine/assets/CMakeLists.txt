@@ -14,4 +14,5 @@ target_include_directories(EngineAssets PUBLIC
 target_link_libraries(EngineAssets PUBLIC
     EngineCore
     EnginePlatform
-    Vulkan::Vulkan)
+    Vulkan::Vulkan
+    assimp)
