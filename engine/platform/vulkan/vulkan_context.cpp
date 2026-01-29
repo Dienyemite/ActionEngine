@@ -370,6 +370,7 @@ bool VulkanContext::CreateLogicalDevice() {
     enabled_features.samplerAnisotropy = VK_TRUE;
     enabled_features.fillModeNonSolid = VK_TRUE;  // Wireframe debug
     enabled_features.multiDrawIndirect = VK_TRUE; // For GPU-driven rendering
+    enabled_features.sampleRateShading = VK_TRUE; // For MSAA sample shading
     
     VkDeviceCreateInfo create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
