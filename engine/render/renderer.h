@@ -144,6 +144,10 @@ public:
     u32 GetTriangleCount() const { return m_stats.triangles; }
     size_t GetVRAMUsage() const { return m_stats.vram_used; }
     
+    // Editor grid
+    void SetGridVisible(bool visible) { m_show_grid = visible; }
+    bool IsGridVisible() const { return m_show_grid; }
+    
     // Resize handling
     void OnResize(u32 width, u32 height);
     
@@ -201,6 +205,8 @@ private:
     VkPipelineLayout m_pipeline_layout = VK_NULL_HANDLE;
     VkPipeline m_forward_pipeline = VK_NULL_HANDLE;
     VkPipeline m_skybox_pipeline = VK_NULL_HANDLE;
+    VkPipeline m_grid_pipeline = VK_NULL_HANDLE;
+    bool m_show_grid = true;  // Toggle for editor grid
     
     // Synchronization (triple buffering)
     static constexpr u32 MAX_FRAMES_IN_FLIGHT = 3;
