@@ -5,6 +5,7 @@
             "label": "Build Release",
             "type": "shell",
             "command": "${workspaceFolder}/build.bat",
+            "dependsOn": "Compile Shaders",
             "group": {
                 "kind": "build",
                 "isDefault": true
