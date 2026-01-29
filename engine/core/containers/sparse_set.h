@@ -68,10 +68,24 @@ public:
                m_dense[dense_index] == entity;
     }
     
-    // Get dense index for entity
+    // Get dense index for entity (returns INVALID if not found)
+    // More efficient than Contains() + GetDenseIndex() separately
     u32 GetDenseIndex(u32 entity) const {
-        if (!Contains(entity)) return INVALID;
-        return GetSparse(entity);
+        if (entity >= m_sparse_pages.size() * PAGE_SIZE) return INVALID;
+        
+        u32 page = entity / PAGE_SIZE;
+        if (page >= m_sparse_pages.size() || !m_sparse_pages[page]) return INVALID;
+        
+        u32 index = entity % PAGE_SIZE;
+        u32 dense_index = m_sparse_pages[page][index];
+        
+        // Validate the mapping (sparse -> dense -> sparse must be consistent)
+        if (dense_index != INVALID && 
+            dense_index < m_dense.size() && 
+            m_dense[dense_index] == entity) {
+            return dense_index;
+        }
+        return INVALID;
     }
     
     // Direct access to dense array

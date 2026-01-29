@@ -69,7 +69,7 @@ vec3 ECS::GetPlayerPosition() const {
         return {0, 0, 0};
     }
     
-    if (auto* transform = const_cast<ECS*>(this)->GetComponent<TransformComponent>(m_player_entity)) {
+    if (auto* transform = GetComponent<TransformComponent>(m_player_entity)) {
         return transform->position;
     }
     
@@ -81,7 +81,7 @@ vec3 ECS::GetPlayerVelocity() const {
         return {0, 0, 0};
     }
     
-    if (auto* velocity = const_cast<ECS*>(this)->GetComponent<VelocityComponent>(m_player_entity)) {
+    if (auto* velocity = GetComponent<VelocityComponent>(m_player_entity)) {
         return velocity->linear;
     }
     

@@ -23,28 +23,39 @@ bool FrustumCuller::IsVisible(const vec3& position, float radius) const {
 void FrustumCuller::CullAABBs(const AABB* bounds, u32 count, 
                                std::vector<CullResult>& results) const {
     results.clear();
-    results.reserve(count);
+    // Reserve capacity to avoid repeated reallocations
+    // Assume ~50% visibility as heuristic
+    if (results.capacity() < count / 2) {
+        results.reserve(count / 2);
+    }
     
     for (u32 i = 0; i < count; ++i) {
-        CullResult result;
-        result.object_index = i;
-        result.visible = m_frustum.intersects(bounds[i]);
-        result.distance_sq = distance_sq(bounds[i].center(), m_camera_pos);
-        results.push_back(result);
+        if (m_frustum.intersects(bounds[i])) {
+            results.push_back({
+                i,
+                true,
+                distance_sq(bounds[i].center(), m_camera_pos)
+            });
+        }
     }
 }
 
 void FrustumCuller::CullSpheres(const Sphere* bounds, u32 count,
                                  std::vector<CullResult>& results) const {
     results.clear();
-    results.reserve(count);
+    // Reserve capacity to avoid repeated reallocations
+    if (results.capacity() < count / 2) {
+        results.reserve(count / 2);
+    }
     
     for (u32 i = 0; i < count; ++i) {
-        CullResult result;
-        result.object_index = i;
-        result.visible = m_frustum.intersects(bounds[i]);
-        result.distance_sq = distance_sq(bounds[i].center, m_camera_pos);
-        results.push_back(result);
+        if (m_frustum.intersects(bounds[i])) {
+            results.push_back({
+                i,
+                true,
+                distance_sq(bounds[i].center, m_camera_pos)
+            });
+        }
     }
 }
 

@@ -37,13 +37,12 @@ constexpr size_t operator""_KB(unsigned long long x) { return x * 1024; }
 constexpr size_t operator""_MB(unsigned long long x) { return x * 1024 * 1024; }
 constexpr size_t operator""_GB(unsigned long long x) { return x * 1024 * 1024 * 1024; }
 
-// SIMD-aligned math types (SSE compatible)
-struct alignas(16) vec2 {
+// Math types (vec3/vec4 are SIMD-aligned, vec2 is compact)
+struct vec2 {
     float x, y;
-    float _pad[2];
     
-    vec2() : x(0), y(0), _pad{0, 0} {}
-    vec2(float x_, float y_) : x(x_), y(y_), _pad{0, 0} {}
+    vec2() : x(0), y(0) {}
+    vec2(float x_, float y_) : x(x_), y(y_) {}
     
     vec2 operator+(const vec2& o) const { return {x + o.x, y + o.y}; }
     vec2 operator-(const vec2& o) const { return {x - o.x, y - o.y}; }
@@ -186,15 +185,24 @@ struct Sphere {
 };
 
 // Standard vertex format for 3D meshes
+// Disable padding warning - alignment is intentional for GPU buffer layout
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4324) // structure was padded
+#endif
 struct Vertex {
     vec3 position;
     vec3 normal;
     vec2 uv;
-    vec3 color;     // Vertex color (or material tint)
-    vec3 tangent;   // For normal mapping
+    float _uv_pad[2];  // Explicit padding to align next vec3
+    vec3 color;        // Vertex color (or material tint)
+    vec3 tangent;      // For normal mapping
     
-    Vertex() : position{0,0,0}, normal{0,1,0}, uv{0,0}, color{1,1,1}, tangent{1,0,0} {}
+    Vertex() : position{0,0,0}, normal{0,1,0}, uv{0,0}, _uv_pad{0,0}, color{1,1,1}, tangent{1,0,0} {}
 };
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif;
 
 // Frustum for culling (6 planes)
 struct Frustum {
