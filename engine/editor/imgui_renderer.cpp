@@ -122,7 +122,8 @@ bool ImGuiRenderer::InitImGuiVulkan(Renderer& renderer) {
     init_info.DescriptorPool = m_imgui_pool;
     init_info.MinImageCount = 2;
     init_info.ImageCount = 3;  // Triple buffering
-    init_info.PipelineInfoMain.RenderPass = renderer.GetForwardPass();
+    // Use FXAA pass since UI renders after FXAA for crisp text
+    init_info.PipelineInfoMain.RenderPass = renderer.GetFXAAPass();
     init_info.PipelineInfoMain.Subpass = 0;
     init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     
