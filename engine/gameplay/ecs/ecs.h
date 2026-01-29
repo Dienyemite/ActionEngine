@@ -129,6 +129,14 @@ public:
     }
     
     template<typename T>
+    const T* GetComponent(Entity entity) const {
+        if (auto* pool = GetPool<T>()) {
+            return pool->Get(entity);
+        }
+        return nullptr;
+    }
+    
+    template<typename T>
     bool HasComponent(Entity entity) const {
         if (auto* pool = GetPool<T>()) {
             return pool->Has(entity);
@@ -137,9 +145,10 @@ public:
     }
     
     // Iteration over entities with specific components
-    template<typename... Components>
-    void ForEach(std::function<void(Entity, Components&...)> func) {
-        // Get the smallest pool for iteration
+    // Uses template functor instead of std::function to avoid heap allocation
+    template<typename... Components, typename Func>
+    void ForEach(Func&& func) {
+        // Get the smallest pool for iteration (reduces iterations)
         auto* first_pool = GetPool<std::tuple_element_t<0, std::tuple<Components...>>>();
         if (!first_pool) return;
         
@@ -196,7 +205,7 @@ private:
     // Entity storage
     std::vector<Entity> m_entities;
     std::vector<Entity> m_free_list;
-    std::vector<bool> m_alive;
+    std::vector<u8> m_alive;  // u8 instead of bool for cache efficiency
     Entity m_next_entity = 0;
     
     // Component pools

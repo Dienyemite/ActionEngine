@@ -1,6 +1,8 @@
 #include "job_system.h"
 #include "../logging.h"
 #include "../profiler.h"
+#include <immintrin.h>  // For _mm_pause()
+#include <chrono>
 
 #ifdef PLATFORM_WINDOWS
 #include <Windows.h>
@@ -10,8 +12,19 @@ namespace action {
 
 void JobHandle::Wait() const {
     if (counter) {
+        // Use exponential backoff to reduce CPU waste
+        u32 spin_count = 0;
         while (counter->load(std::memory_order_acquire) > 0) {
-            std::this_thread::yield();
+            if (spin_count < 16) {
+                // Brief spin for fast completion
+                _mm_pause();  // CPU hint for spin-wait
+            } else if (spin_count < 64) {
+                std::this_thread::yield();
+            } else {
+                // Longer sleep for truly long waits
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            }
+            ++spin_count;
         }
     }
 }
