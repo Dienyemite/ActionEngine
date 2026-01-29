@@ -176,6 +176,9 @@ void Renderer::Shutdown() {
     }
     
     // Destroy pipelines
+    if (m_grid_pipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, m_grid_pipeline, nullptr);
+    }
     if (m_skybox_pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(device, m_skybox_pipeline, nullptr);
     }
@@ -1029,6 +1032,120 @@ bool Renderer::CreatePipelines() {
     
     LOG_INFO("Created skybox pipeline");
     
+    // ========================================
+    // Create grid pipeline (infinite editor grid)
+    // ========================================
+    VkShaderModule grid_vert = LoadShaderModule("shaders/compiled/grid_vert.spv");
+    VkShaderModule grid_frag = LoadShaderModule("shaders/compiled/grid_frag.spv");
+    
+    if (grid_vert == VK_NULL_HANDLE || grid_frag == VK_NULL_HANDLE) {
+        LOG_WARN("Grid shaders not found - grid will be disabled");
+        // Grid is optional, don't fail initialization
+    } else {
+        VkPipelineShaderStageCreateInfo grid_vert_stage{};
+        grid_vert_stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        grid_vert_stage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+        grid_vert_stage.module = grid_vert;
+        grid_vert_stage.pName = "main";
+        
+        VkPipelineShaderStageCreateInfo grid_frag_stage{};
+        grid_frag_stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        grid_frag_stage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        grid_frag_stage.module = grid_frag;
+        grid_frag_stage.pName = "main";
+        
+        std::array<VkPipelineShaderStageCreateInfo, 2> grid_stages = {grid_vert_stage, grid_frag_stage};
+        
+        // No vertex input (fullscreen triangle)
+        VkPipelineVertexInputStateCreateInfo grid_vertex_input{};
+        grid_vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        grid_vertex_input.vertexBindingDescriptionCount = 0;
+        grid_vertex_input.vertexAttributeDescriptionCount = 0;
+        
+        VkPipelineInputAssemblyStateCreateInfo grid_input_assembly{};
+        grid_input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        grid_input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        grid_input_assembly.primitiveRestartEnable = VK_FALSE;
+        
+        VkPipelineViewportStateCreateInfo grid_viewport{};
+        grid_viewport.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        grid_viewport.viewportCount = 1;
+        grid_viewport.scissorCount = 1;
+        
+        VkPipelineRasterizationStateCreateInfo grid_rasterizer{};
+        grid_rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        grid_rasterizer.depthClampEnable = VK_FALSE;
+        grid_rasterizer.rasterizerDiscardEnable = VK_FALSE;
+        grid_rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+        grid_rasterizer.lineWidth = 1.0f;
+        grid_rasterizer.cullMode = VK_CULL_MODE_NONE;
+        grid_rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        grid_rasterizer.depthBiasEnable = VK_FALSE;
+        
+        VkPipelineMultisampleStateCreateInfo grid_multisampling{};
+        grid_multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        grid_multisampling.sampleShadingEnable = VK_FALSE;
+        grid_multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        
+        // Depth test enabled, write enabled (for proper occlusion)
+        VkPipelineDepthStencilStateCreateInfo grid_depth{};
+        grid_depth.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        grid_depth.depthTestEnable = VK_TRUE;
+        grid_depth.depthWriteEnable = VK_TRUE;
+        grid_depth.depthCompareOp = VK_COMPARE_OP_LESS;
+        grid_depth.depthBoundsTestEnable = VK_FALSE;
+        grid_depth.stencilTestEnable = VK_FALSE;
+        
+        // Alpha blending for grid fade
+        VkPipelineColorBlendAttachmentState grid_blend_attachment{};
+        grid_blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                               VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        grid_blend_attachment.blendEnable = VK_TRUE;
+        grid_blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        grid_blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        grid_blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
+        grid_blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        grid_blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        grid_blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+        
+        VkPipelineColorBlendStateCreateInfo grid_blending{};
+        grid_blending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        grid_blending.logicOpEnable = VK_FALSE;
+        grid_blending.attachmentCount = 1;
+        grid_blending.pAttachments = &grid_blend_attachment;
+        
+        std::array<VkDynamicState, 2> grid_dynamic_states = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo grid_dynamic{};
+        grid_dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        grid_dynamic.dynamicStateCount = static_cast<u32>(grid_dynamic_states.size());
+        grid_dynamic.pDynamicStates = grid_dynamic_states.data();
+        
+        VkGraphicsPipelineCreateInfo grid_pipeline_info{};
+        grid_pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        grid_pipeline_info.stageCount = static_cast<u32>(grid_stages.size());
+        grid_pipeline_info.pStages = grid_stages.data();
+        grid_pipeline_info.pVertexInputState = &grid_vertex_input;
+        grid_pipeline_info.pInputAssemblyState = &grid_input_assembly;
+        grid_pipeline_info.pViewportState = &grid_viewport;
+        grid_pipeline_info.pRasterizationState = &grid_rasterizer;
+        grid_pipeline_info.pMultisampleState = &grid_multisampling;
+        grid_pipeline_info.pDepthStencilState = &grid_depth;
+        grid_pipeline_info.pColorBlendState = &grid_blending;
+        grid_pipeline_info.pDynamicState = &grid_dynamic;
+        grid_pipeline_info.layout = m_pipeline_layout;
+        grid_pipeline_info.renderPass = m_forward_pass;
+        grid_pipeline_info.subpass = 0;
+        
+        if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &grid_pipeline_info, nullptr, &m_grid_pipeline) != VK_SUCCESS) {
+            LOG_WARN("Failed to create grid pipeline - grid will be disabled");
+        } else {
+            LOG_INFO("Created grid pipeline");
+        }
+        
+        vkDestroyShaderModule(device, grid_vert, nullptr);
+        vkDestroyShaderModule(device, grid_frag, nullptr);
+    }
+    
     return true;
 }
 
@@ -1276,6 +1393,14 @@ void Renderer::RecordCommandBuffer(u32 image_index, const RenderList& render_lis
             
             vkCmdDrawIndexed(cmd, m_test_index_count, 1, 0, 0, 0);
         }
+    }
+    
+    // ========================================
+    // Draw infinite grid (after scene, before UI)
+    // ========================================
+    if (m_show_grid && m_grid_pipeline != VK_NULL_HANDLE) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_grid_pipeline);
+        vkCmdDraw(cmd, 3, 1, 0, 0);  // Fullscreen triangle
     }
     
     // Call UI render callback (for ImGui rendering)

@@ -8,10 +8,20 @@ set SCRIPT_DIR=%~dp0
 set SHADER_DIR=%SCRIPT_DIR%shaders
 set OUTPUT_DIR=%SCRIPT_DIR%shaders\compiled
 
-REM Use VULKAN_SDK environment variable to find glslc
+REM Use VULKAN_SDK environment variable or find in default locations
 if defined VULKAN_SDK (
     set GLSLC=%VULKAN_SDK%\Bin\glslc.exe
 ) else (
+    REM Try to find Vulkan SDK in default install location
+    for /d %%d in (C:\VulkanSDK\*) do (
+        if exist "%%d\Bin\glslc.exe" (
+            set GLSLC=%%d\Bin\glslc.exe
+        )
+    )
+)
+
+REM Fallback to PATH
+if not defined GLSLC (
     set GLSLC=glslc
 )
 
