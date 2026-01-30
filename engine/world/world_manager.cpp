@@ -95,6 +95,51 @@ void WorldManager::GatherVisibleObjects(const Camera& camera, RenderList& out_li
         }
     }
     
+    // Also gather ECS entities with RenderComponent that aren't in chunks
+    // (e.g., editor-spawned objects, imported meshes)
+    if (m_ecs) {
+        m_ecs->ForEach<TransformComponent, RenderComponent>(
+            [&](Entity entity, TransformComponent& transform, RenderComponent& render) {
+                if (!render.visible || !render.mesh.is_valid()) {
+                    return;
+                }
+                
+                // Skip entities that are already in chunks (have WorldObjectComponent)
+                // For now, we check by seeing if bounds component exists and is reasonable
+                AABB bounds;
+                if (m_ecs->HasComponent<BoundsComponent>(entity)) {
+                    bounds = m_ecs->GetComponent<BoundsComponent>(entity)->world_bounds;
+                } else {
+                    // Default bounds if no bounds component
+                    bounds.min = transform.position - vec3{1, 1, 1};
+                    bounds.max = transform.position + vec3{1, 1, 1};
+                }
+                
+                // Distance check
+                float dist_sq = distance_sq(transform.position, camera.position);
+                if (dist_sq > m_config.draw_distance * m_config.draw_distance) {
+                    return;
+                }
+                
+                // Frustum check
+                if (!m_culler.IsVisible(bounds)) {
+                    return;
+                }
+                
+                // Add to render list
+                RenderObject render_obj;
+                render_obj.mesh = render.mesh;
+                render_obj.material = render.material;
+                render_obj.transform = transform.GetMatrix();
+                render_obj.bounds = bounds;
+                render_obj.distance_sq = dist_sq;
+                render_obj.lod_level = render.lod_level;
+                
+                out_list.opaque.push_back(render_obj);
+                out_list.total_draw_calls++;
+            });
+    }
+    
     // Sort opaque by distance (front-to-back for early-z)
     std::sort(out_list.opaque.begin(), out_list.opaque.end(),
               [](const RenderObject& a, const RenderObject& b) {

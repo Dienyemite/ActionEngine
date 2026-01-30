@@ -366,11 +366,16 @@ void Engine::UpdateStats() {
     m_frame_stats.vram_used = m_renderer->GetVRAMUsage();
     m_frame_stats.streaming_uploaded = m_assets->GetBytesUploadedThisFrame();
     
-    // Warn if over budget
+    // Warn if over budget (rate-limited to once per second)
+    static float last_frame_warning_time = 0.0f;
     if (m_frame_stats.frame_time_ms > m_config.budgets.target_frame_time_ms * 1.1f) {
-        LOG_WARN("Frame time exceeded budget: {:.2f}ms > {:.2f}ms",
-                 m_frame_stats.frame_time_ms, 
-                 m_config.budgets.target_frame_time_ms);
+        float current_time = static_cast<float>(m_total_time);
+        if (current_time - last_frame_warning_time > 1.0f) {
+            LOG_WARN("Frame time exceeded budget: {:.2f}ms > {:.2f}ms",
+                     m_frame_stats.frame_time_ms, 
+                     m_config.budgets.target_frame_time_ms);
+            last_frame_warning_time = current_time;
+        }
     }
     
     if (m_frame_stats.draw_calls > m_config.budgets.max_draw_calls) {

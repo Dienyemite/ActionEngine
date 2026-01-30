@@ -321,13 +321,19 @@ bool AssetHotReloader::ImportAsset(const std::string& path) {
     return true;
 }
 
+bool AssetHotReloader::ImportFile(const std::string& filepath) {
+    // Public method for manual import via file dialog
+    return ImportAsset(filepath);
+}
+
 bool AssetHotReloader::ShouldWatch(const std::string& path) const {
     // Get extension
     std::string ext = std::filesystem::path(path).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
     
-    // Supported formats
-    return ext == ".obj" || ext == ".gltf" || ext == ".glb" || ext == ".fbx";
+    // Supported formats (match AssetImporter)
+    return ext == ".obj" || ext == ".gltf" || ext == ".glb" || ext == ".fbx" ||
+           ext == ".blend" || ext == ".dae" || ext == ".3ds" || ext == ".stl" || ext == ".ply";
 }
 
 } // namespace action
