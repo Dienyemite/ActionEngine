@@ -41,16 +41,43 @@ void main() {
     // Normal and lighting vectors
     vec3 N = normalize(fragNormal);
     vec3 L = normalize(-lighting.sunDirection.xyz);
+    vec3 V = normalize(camera.cameraPos - fragWorldPos);
+    vec3 H = normalize(L + V);
     float sunIntensity = lighting.sunDirection.w;
     
-    // Simple diffuse lighting
-    float NdotL = max(dot(N, L), 0.0);
+    // Wrapped diffuse for soft clay-like shading (Blender MatCap style)
+    float NdotL = dot(N, L);
+    float wrap = 0.5;  // Wrap factor for softer falloff
+    float diffuseWrap = max((NdotL + wrap) / (1.0 + wrap), 0.0);
     
-    // Ambient + diffuse
-    vec3 ambient = albedo * lighting.ambientColor.xyz * 0.3;
-    vec3 diffuse = albedo * lighting.sunColor.xyz * NdotL * sunIntensity;
+    // Subtle hemisphere ambient (sky slightly brighter than ground)
+    vec3 skyColor = vec3(0.45, 0.45, 0.48);   // Slightly cool
+    vec3 groundColor = vec3(0.25, 0.24, 0.23); // Slightly warm
+    float hemisphereBlend = N.y * 0.5 + 0.5;
+    vec3 hemisphereAmbient = mix(groundColor, skyColor, hemisphereBlend);
     
-    vec3 color = ambient + diffuse;
+    // Very subtle rim for edge definition
+    float rimFactor = 1.0 - max(dot(N, V), 0.0);
+    rimFactor = pow(rimFactor, 4.0) * 0.15;
+    
+    // Subtle specular (matte surface)
+    float NdotH = max(dot(N, H), 0.0);
+    float specular = pow(NdotH, 64.0) * 0.15 * max(NdotL, 0.0);
+    
+    // Combine lighting - balanced for clay/sculpt look
+    vec3 ambient = albedo * hemisphereAmbient * 0.6;
+    vec3 diffuse = albedo * vec3(0.9, 0.88, 0.85) * diffuseWrap * sunIntensity * 0.5;
+    vec3 spec = vec3(1.0) * specular;
+    vec3 rim = vec3(0.8) * rimFactor;
+    
+    vec3 color = ambient + diffuse + spec + rim;
+    
+    // Subtle contrast adjustment
+    color = mix(vec3(0.4), color, 0.95);
+    
+    // Soft tone mapping
+    color = color / (color + vec3(0.8));
+    color *= 1.1;  // Slight exposure boost
     
     // Gamma correction
     color = pow(color, vec3(1.0 / 2.2));

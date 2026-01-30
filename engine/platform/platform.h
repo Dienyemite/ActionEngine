@@ -108,6 +108,10 @@ public:
     double GetTime() const;
     void Sleep(u32 milliseconds);
     
+    // File dialogs
+    std::string OpenFileDialog(const std::string& title, const std::string& filter, const std::string& default_path = "");
+    std::string SaveFileDialog(const std::string& title, const std::string& filter, const std::string& default_path = "");
+    
 private:
     u32 m_width = 0;
     u32 m_height = 0;

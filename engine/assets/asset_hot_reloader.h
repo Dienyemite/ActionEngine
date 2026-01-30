@@ -117,6 +117,12 @@ public:
     using AssetReloadCallback = std::function<void(const std::string& path, bool success)>;
     void SetReloadCallback(AssetReloadCallback callback) { m_reload_callback = callback; }
     
+    // Manual import of a file (used by file dialog)
+    bool ImportFile(const std::string& filepath);
+    
+    // Get the importer for format checks
+    AssetImporter& GetImporter() { return m_importer; }
+    
     // Statistics
     u32 GetWatchedFileCount() const { return (u32)m_watched_files.size(); }
     u32 GetImportedAssetCount() const { return (u32)m_imported_assets.size(); }

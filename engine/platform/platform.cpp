@@ -4,6 +4,8 @@
 #ifdef PLATFORM_WINDOWS
 #include <Windows.h>
 #include <windowsx.h>
+#include <commdlg.h>
+#include <shlobj.h>
 
 // Forward declare ImGui Win32 handler (C++ linkage)
 LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -400,6 +402,66 @@ double Platform::GetTime() const {
 
 void Platform::Sleep(u32 milliseconds) {
     ::Sleep(milliseconds);
+}
+
+std::string Platform::OpenFileDialog(const std::string& title, const std::string& filter, const std::string& default_path) {
+    char filename[MAX_PATH] = {0};
+    
+    // Convert filter from "Description|*.ext|..." to "Description\0*.ext\0...\0\0"
+    std::string filter_str = filter;
+    for (char& c : filter_str) {
+        if (c == '|') c = '\0';
+    }
+    filter_str.push_back('\0');
+    
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = m_hwnd;
+    ofn.lpstrFilter = filter_str.c_str();
+    ofn.lpstrFile = filename;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrTitle = title.c_str();
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    
+    if (!default_path.empty()) {
+        ofn.lpstrInitialDir = default_path.c_str();
+    }
+    
+    if (GetOpenFileNameA(&ofn)) {
+        return std::string(filename);
+    }
+    
+    return "";
+}
+
+std::string Platform::SaveFileDialog(const std::string& title, const std::string& filter, const std::string& default_path) {
+    char filename[MAX_PATH] = {0};
+    
+    // Convert filter from "Description|*.ext|..." to "Description\0*.ext\0...\0\0"
+    std::string filter_str = filter;
+    for (char& c : filter_str) {
+        if (c == '|') c = '\0';
+    }
+    filter_str.push_back('\0');
+    
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = m_hwnd;
+    ofn.lpstrFilter = filter_str.c_str();
+    ofn.lpstrFile = filename;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrTitle = title.c_str();
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+    
+    if (!default_path.empty()) {
+        ofn.lpstrInitialDir = default_path.c_str();
+    }
+    
+    if (GetSaveFileNameA(&ofn)) {
+        return std::string(filename);
+    }
+    
+    return "";
 }
 
 #endif // PLATFORM_WINDOWS
