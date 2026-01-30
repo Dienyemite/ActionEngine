@@ -8,14 +8,16 @@ AssetHotReloader::~AssetHotReloader() {
     Shutdown();
 }
 
-void AssetHotReloader::Initialize(AssetManager* assets, Editor* editor) {
+void AssetHotReloader::Initialize(AssetManager* assets, Editor* editor, JobSystem* jobs) {
     m_assets = assets;
     m_editor = editor;
+    m_jobs = jobs;
     m_importer.Initialize(assets);
     
     // Default import settings for Blender exports
     m_default_import_settings.scale = 1.0f;
     m_default_import_settings.flip_uvs = true;
+    m_default_import_settings.flip_winding = true;  // Blender exports clockwise, Vulkan expects CCW
     m_default_import_settings.source_up_axis = ImportSettings::UpAxis::Z;  // Blender uses Z-up
     
     LOG_INFO("AssetHotReloader initialized");
@@ -334,6 +336,89 @@ bool AssetHotReloader::ShouldWatch(const std::string& path) const {
     // Supported formats (match AssetImporter)
     return ext == ".obj" || ext == ".gltf" || ext == ".glb" || ext == ".fbx" ||
            ext == ".blend" || ext == ".dae" || ext == ".3ds" || ext == ".stl" || ext == ".ply";
+}
+
+void AssetHotReloader::ImportFileAsync(const std::string& filepath) {
+    if (!ShouldWatch(filepath)) {
+        LOG_WARN("Unsupported format for async import: {}", filepath);
+        return;
+    }
+    
+    LOG_INFO("Starting async import of: {}", filepath);
+    
+    // Capture settings by value for the async task
+    ImportSettings settings = m_default_import_settings;
+    std::string path = filepath;
+    
+    // Launch async import task
+    PendingAsyncImport pending;
+    pending.filepath = filepath;
+    pending.start_time = std::chrono::steady_clock::now();
+    pending.future = std::async(std::launch::async, [this, path, settings]() {
+        return m_importer.Import(path, settings);
+    });
+    
+    std::lock_guard<std::mutex> lock(m_pending_imports_mutex);
+    m_pending_imports.push_back(std::move(pending));
+}
+
+bool AssetHotReloader::HasCompletedImport() {
+    std::lock_guard<std::mutex> lock(m_pending_imports_mutex);
+    
+    for (auto it = m_pending_imports.begin(); it != m_pending_imports.end(); ) {
+        // Check if future is ready (non-blocking)
+        if (it->future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+            try {
+                ImportResult result = it->future.get();
+                
+                auto elapsed = std::chrono::steady_clock::now() - it->start_time;
+                float elapsed_ms = std::chrono::duration<float, std::milli>(elapsed).count();
+                
+                if (!result.success) {
+                    LOG_ERROR("Async import failed {}: {}", it->filepath, result.error_message);
+                    it = m_pending_imports.erase(it);
+                    continue;
+                }
+                
+                // Create mesh handles on main thread (GPU upload)
+                std::vector<MeshHandle> meshes = m_importer.CreateMeshes(result.scene, *m_assets);
+                
+                if (meshes.empty()) {
+                    LOG_WARN("No meshes created from async import: {}", it->filepath);
+                    it = m_pending_imports.erase(it);
+                    continue;
+                }
+                
+                // Track imported asset
+                ImportedAsset asset;
+                asset.source_path = it->filepath;
+                asset.asset_name = result.scene.meshes[0].name;
+                asset.mesh_handle = meshes[0];
+                asset.import_time = std::filesystem::file_time_type::clock::now();
+                asset.settings = m_default_import_settings;
+                
+                m_imported_assets[it->filepath] = asset;
+                
+                LOG_INFO("Async import completed: {} ({} meshes, {} vertices, {:.1f}ms total)",
+                         it->filepath, meshes.size(), result.scene.total_vertices, elapsed_ms);
+                
+                if (m_reload_callback) {
+                    m_reload_callback(it->filepath, true);
+                }
+                
+                it = m_pending_imports.erase(it);
+                return true;  // Signal that an import completed
+                
+            } catch (const std::exception& e) {
+                LOG_ERROR("Async import exception for {}: {}", it->filepath, e.what());
+                it = m_pending_imports.erase(it);
+            }
+        } else {
+            ++it;
+        }
+    }
+    
+    return false;
 }
 
 } // namespace action

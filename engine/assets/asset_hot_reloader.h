@@ -11,12 +11,23 @@
 #include <atomic>
 #include <mutex>
 #include <chrono>
+#include <future>
 
 namespace action {
 
 // Forward declarations
 class AssetManager;
 class Editor;
+class JobSystem;
+
+/*
+ * PendingAsyncImport - Tracks an in-progress async import
+ */
+struct PendingAsyncImport {
+    std::string filepath;
+    std::future<ImportResult> future;
+    std::chrono::steady_clock::time_point start_time;
+};
 
 /*
  * FileWatchEvent - Type of file change detected
@@ -72,7 +83,7 @@ public:
     ~AssetHotReloader();
     
     // Initialize with references to engine systems
-    void Initialize(AssetManager* assets, Editor* editor);
+    void Initialize(AssetManager* assets, Editor* editor, JobSystem* jobs = nullptr);
     void Shutdown();
     
     // Directory watching
@@ -120,6 +131,11 @@ public:
     // Manual import of a file (used by file dialog)
     bool ImportFile(const std::string& filepath);
     
+    // Async import - returns immediately, check IsImportPending() and GetCompletedImport()
+    void ImportFileAsync(const std::string& filepath);
+    bool IsImportPending() const { return !m_pending_imports.empty(); }
+    bool HasCompletedImport();
+    
     // Get the importer for format checks
     AssetImporter& GetImporter() { return m_importer; }
     
@@ -145,7 +161,12 @@ private:
     
     AssetManager* m_assets = nullptr;
     Editor* m_editor = nullptr;
+    JobSystem* m_jobs = nullptr;
     AssetImporter m_importer;
+    
+    // Async import tracking
+    std::vector<PendingAsyncImport> m_pending_imports;
+    std::mutex m_pending_imports_mutex;
     
     // Watch configuration
     std::vector<std::pair<std::string, bool>> m_watch_directories;  // path, recursive

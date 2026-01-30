@@ -187,6 +187,9 @@ private:
     MeshHandle m_sphere_mesh{0};
     MeshHandle m_plane_mesh{0};
     
+    // Pending async import
+    std::string m_pending_import_path;
+    
     // References to engine systems
     Renderer* m_renderer = nullptr;
     Platform* m_platform = nullptr;
