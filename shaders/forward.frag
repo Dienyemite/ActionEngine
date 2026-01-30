@@ -38,48 +38,39 @@ layout(push_constant) uniform PushConstants {
 void main() {
     vec3 albedo = push.color.rgb;
     
-    // Normal and lighting vectors
+    // Normal and view vectors
     vec3 N = normalize(fragNormal);
-    vec3 L = normalize(-lighting.sunDirection.xyz);
     vec3 V = normalize(camera.cameraPos - fragWorldPos);
-    vec3 H = normalize(L + V);
-    float sunIntensity = lighting.sunDirection.w;
     
-    // Wrapped diffuse for soft clay-like shading (Blender MatCap style)
-    float NdotL = dot(N, L);
-    float wrap = 0.5;  // Wrap factor for softer falloff
-    float diffuseWrap = max((NdotL + wrap) / (1.0 + wrap), 0.0);
+    // MatCap-style lighting (view-space based, like Blender solid mode)
+    vec3 viewNormal = normalize((camera.view * vec4(N, 0.0)).xyz);
     
-    // Subtle hemisphere ambient (sky slightly brighter than ground)
-    vec3 skyColor = vec3(0.45, 0.45, 0.48);   // Slightly cool
-    vec3 groundColor = vec3(0.25, 0.24, 0.23); // Slightly warm
-    float hemisphereBlend = N.y * 0.5 + 0.5;
-    vec3 hemisphereAmbient = mix(groundColor, skyColor, hemisphereBlend);
+    // Two-point lighting setup (key + fill, like Blender's default)
+    vec3 keyLightDir = normalize(vec3(0.4, 0.7, 0.5));   // Upper-right
+    vec3 fillLightDir = normalize(vec3(-0.3, 0.2, 0.4)); // Lower-left fill
     
-    // Very subtle rim for edge definition
-    float rimFactor = 1.0 - max(dot(N, V), 0.0);
-    rimFactor = pow(rimFactor, 4.0) * 0.15;
+    // Standard lambertian with clamped falloff for darker shadows
+    float keyDiffuse = max(dot(viewNormal, keyLightDir), 0.0);
+    float fillDiffuse = max(dot(viewNormal, fillLightDir), 0.0) * 0.25;
     
-    // Subtle specular (matte surface)
-    float NdotH = max(dot(N, H), 0.0);
-    float specular = pow(NdotH, 64.0) * 0.15 * max(NdotL, 0.0);
+    // Combine key and fill
+    vec3 keyColor = vec3(0.75, 0.74, 0.72);  // Neutral key, reduced intensity
+    vec3 fillColor = vec3(0.25, 0.24, 0.22); // Dimmer warm fill
+    vec3 diffuse = keyColor * keyDiffuse + fillColor * fillDiffuse;
     
-    // Combine lighting - balanced for clay/sculpt look
-    vec3 ambient = albedo * hemisphereAmbient * 0.6;
-    vec3 diffuse = albedo * vec3(0.9, 0.88, 0.85) * diffuseWrap * sunIntensity * 0.5;
-    vec3 spec = vec3(1.0) * specular;
-    vec3 rim = vec3(0.8) * rimFactor;
+    // Darker ambient for areas facing away from lights
+    float ambientOcclusion = viewNormal.y * 0.5 + 0.5;  // Top-down gradient
+    float cavityDarken = 1.0 - pow(1.0 - max(dot(viewNormal, vec3(0.0, 0.0, 1.0)), 0.0), 2.0) * 0.3;
+    vec3 ambient = mix(vec3(0.08, 0.08, 0.09), vec3(0.18, 0.18, 0.20), ambientOcclusion) * cavityDarken;
     
-    vec3 color = ambient + diffuse + spec + rim;
+    // Subtle rim for edge separation
+    float fresnel = pow(1.0 - max(dot(N, V), 0.0), 5.0);
+    vec3 rim = vec3(0.08) * fresnel;
     
-    // Subtle contrast adjustment
-    color = mix(vec3(0.4), color, 0.95);
+    // Combine with albedo
+    vec3 color = albedo * (ambient + diffuse * 0.65) + rim;
     
-    // Soft tone mapping
-    color = color / (color + vec3(0.8));
-    color *= 1.1;  // Slight exposure boost
-    
-    // Gamma correction
+    // Gamma correction only (no tone mapping to preserve contrast)
     color = pow(color, vec3(1.0 / 2.2));
     
     outColor = vec4(color, 1.0);

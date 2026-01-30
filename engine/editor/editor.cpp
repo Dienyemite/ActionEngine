@@ -119,6 +119,65 @@ void Editor::Update(float dt) {
     // Process hot reloaded assets
     m_hot_reloader.Update();
     
+    // Check for completed async imports
+    if (m_hot_reloader.HasCompletedImport() && !m_pending_import_path.empty()) {
+        const auto& assets = m_hot_reloader.GetImportedAssets();
+        auto it = assets.find(m_pending_import_path);
+        if (it != assets.end() && it->second.mesh_handle.is_valid()) {
+            MeshHandle imported_mesh = it->second.mesh_handle;
+            std::string mesh_name = it->second.asset_name;
+            if (mesh_name.empty()) {
+                size_t last_slash = m_pending_import_path.find_last_of("\\/");
+                size_t last_dot = m_pending_import_path.find_last_of('.');
+                if (last_slash != std::string::npos && last_dot != std::string::npos) {
+                    mesh_name = m_pending_import_path.substr(last_slash + 1, last_dot - last_slash - 1);
+                } else {
+                    mesh_name = "ImportedMesh";
+                }
+            }
+            
+            // Create editor node with the mesh
+            EditorNode node;
+            node.id = m_next_node_id++;
+            node.name = mesh_name;
+            node.type = "Mesh";
+            node.position = {0, 0, 0};
+            node.rotation = {0, 0, 0};
+            node.scale = {1, 1, 1};
+            node.mesh = imported_mesh;
+            node.visible = true;
+            
+            // Create ECS entity
+            Entity entity = m_ecs->CreateEntity();
+            node.entity = entity;
+            
+            auto& transform = m_ecs->AddComponent<TransformComponent>(entity);
+            transform.position = node.position;
+            transform.rotation = quat::identity();
+            transform.scale = node.scale;
+            
+            auto& render = m_ecs->AddComponent<RenderComponent>(entity);
+            render.mesh = imported_mesh;
+            render.visible = true;
+            render.cast_shadow = true;
+            
+            auto& bounds = m_ecs->AddComponent<BoundsComponent>(entity);
+            if (MeshData* mesh_data = m_assets->GetMesh(imported_mesh)) {
+                bounds.local_bounds = mesh_data->bounds;
+                bounds.world_bounds = mesh_data->bounds;
+            }
+            
+            auto& tag = m_ecs->AddComponent<TagComponent>(entity);
+            tag.name = node.name;
+            
+            m_scene_root.children.push_back(node);
+            SetSelectedNode(node.id);
+            
+            Log("Created mesh node: " + mesh_name, 0);
+        }
+        m_pending_import_path.clear();
+    }
+    
     // Setup dockspace for the entire window
     SetupDockspace();
     
@@ -458,86 +517,18 @@ void Editor::DrawMenuBar() {
                 std::string filepath = m_platform->OpenFileDialog("Import 3D Model", filter, "");
                 
                 if (!filepath.empty()) {
-                    Log("Starting import of: " + filepath, 0);
-                    if (m_hot_reloader.ImportFile(filepath)) {
-                        Log("Import completed: " + filepath, 0);
-                        
-                        // Get the imported asset and create a scene node for it
-                        const auto& assets = m_hot_reloader.GetImportedAssets();
-                        Log("Looking for asset in " + std::to_string(assets.size()) + " imported assets", 0);
-                        auto it = assets.find(filepath);
-                        if (it != assets.end()) {
-                            Log("Found asset, mesh handle index: " + std::to_string(it->second.mesh_handle.index), 0);
-                            if (it->second.mesh_handle.is_valid()) {
-                            MeshHandle imported_mesh = it->second.mesh_handle;
-                            std::string mesh_name = it->second.asset_name;
-                            if (mesh_name.empty()) {
-                                // Extract filename without extension as name
-                                size_t last_slash = filepath.find_last_of("\\/");
-                                size_t last_dot = filepath.find_last_of('.');
-                                if (last_slash != std::string::npos && last_dot != std::string::npos) {
-                                    mesh_name = filepath.substr(last_slash + 1, last_dot - last_slash - 1);
-                                } else {
-                                    mesh_name = "ImportedMesh";
-                                }
-                            }
-                            
-                            // Create editor node manually with the mesh already set
-                            EditorNode node;
-                            node.id = m_next_node_id++;
-                            node.name = mesh_name;
-                            node.type = "Mesh";
-                            node.position = {0, 0, 0};
-                            node.rotation = {0, 0, 0};
-                            node.scale = {1, 1, 1};
-                            node.mesh = imported_mesh;
-                            node.visible = true;
-                            
-                            // Create ECS entity with render component
-                            Entity entity = m_ecs->CreateEntity();
-                            node.entity = entity;
-                            
-                            // Add transform component
-                            auto& transform = m_ecs->AddComponent<TransformComponent>(entity);
-                            transform.position = node.position;
-                            transform.rotation = quat::identity();
-                            transform.scale = node.scale;
-                            
-                            // Add render component with the imported mesh
-                            auto& render = m_ecs->AddComponent<RenderComponent>(entity);
-                            render.mesh = imported_mesh;
-                            render.visible = true;
-                            render.cast_shadow = true;
-                            
-                            // Add bounds component
-                            auto& bounds = m_ecs->AddComponent<BoundsComponent>(entity);
-                            if (MeshData* mesh_data = m_assets->GetMesh(imported_mesh)) {
-                                bounds.local_bounds = mesh_data->bounds;
-                                bounds.world_bounds = mesh_data->bounds;
-                            }
-                            
-                            // Add tag component
-                            auto& tag = m_ecs->AddComponent<TagComponent>(entity);
-                            tag.name = node.name;
-                            
-                            // Add to scene tree
-                            m_scene_root.children.push_back(node);
-                            
-                            // Select the new node
-                            SetSelectedNode(node.id);
-                            
-                            Log("Created mesh node: " + mesh_name, 0);
-                            } else {
-                                Log("Import succeeded but no valid mesh was created", 1);
-                            }
-                        } else {
-                            Log("Asset not found in imported assets map", 1);
-                        }
-                    } else {
-                        Log("Failed to import: " + filepath, 2);
-                    }
+                    Log("Starting async import of: " + filepath, 0);
+                    m_pending_import_path = filepath;
+                    m_hot_reloader.ImportFileAsync(filepath);
                 }
             }
+            
+            // Show import progress indicator
+            if (m_hot_reloader.IsImportPending()) {
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Importing model...");
+            }
+            
             ImGui::Separator();
             bool watching = m_hot_reloader.IsWatching();
             if (ImGui::MenuItem(watching ? "Stop Hot Reload" : "Start Hot Reload")) {
