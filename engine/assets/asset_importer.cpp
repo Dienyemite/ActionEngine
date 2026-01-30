@@ -83,21 +83,32 @@ ImportResult AssetImporter::ImportWithAssimp(const std::string& filepath, const 
     
     Assimp::Importer importer;
     
-    // Configure import flags based on settings
-    unsigned int flags = 
-        aiProcess_Triangulate |           // Triangulate all faces
-        aiProcess_GenSmoothNormals |      // Generate smooth normals if missing
-        aiProcess_CalcTangentSpace |      // Generate tangents for normal mapping
-        aiProcess_JoinIdenticalVertices | // Optimize vertex count
-        aiProcess_RemoveRedundantMaterials |
-        aiProcess_OptimizeMeshes |        // Reduce draw call count
-        aiProcess_ValidateDataStructure;
+    // Configure import flags - minimal set for fast loading
+    unsigned int flags = aiProcess_Triangulate;  // Always triangulate
     
-    // Optional flags based on settings
-    if (settings.flip_uvs) {
-        flags |= aiProcess_FlipUVs;       // Flip V for Vulkan coordinate system
+    if (!settings.fast_import) {
+        // Full processing (slower but higher quality)
+        if (settings.generate_normals) {
+            flags |= aiProcess_GenSmoothNormals;
+        }
+        if (settings.generate_tangents) {
+            flags |= aiProcess_CalcTangentSpace;
+        }
+        if (settings.optimize_meshes) {
+            flags |= aiProcess_JoinIdenticalVertices;
+            flags |= aiProcess_OptimizeMeshes;
+            flags |= aiProcess_RemoveRedundantMaterials;
+        }
+        flags |= aiProcess_ValidateDataStructure;
+    } else {
+        // Fast import - only essential processing
+        flags |= aiProcess_GenNormals;  // Fast normal generation (not smooth)
     }
     
+    // These are fast operations, always apply
+    if (settings.flip_uvs) {
+        flags |= aiProcess_FlipUVs;
+    }
     if (settings.flip_winding) {
         flags |= aiProcess_FlipWindingOrder;
     }

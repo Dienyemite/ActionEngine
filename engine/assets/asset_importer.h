@@ -89,11 +89,12 @@ struct ImportSettings {
     bool flip_uvs = true;          // Flip V coordinate for Vulkan
     bool flip_winding = false;     // Flip triangle winding
     bool generate_normals = true;  // Generate normals if missing
-    bool generate_tangents = true; // Generate tangents for normal mapping
+    bool generate_tangents = false; // Generate tangents for normal mapping (slow)
     
     // Optimization
     bool merge_meshes = false;     // Combine all meshes into one
-    bool optimize_meshes = true;   // Optimize vertex cache
+    bool optimize_meshes = false;  // Optimize vertex cache (slow for large models)
+    bool fast_import = true;       // Skip expensive post-processing for speed
     
     // Import components
     bool import_materials = true;
