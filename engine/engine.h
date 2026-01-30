@@ -23,6 +23,7 @@
 #include "world/world_manager.h"
 #include "assets/asset_manager.h"
 #include "gameplay/ecs/ecs.h"
+#include "scripting/script_system.h"
 #include "editor/editor.h"
 
 namespace action {
@@ -94,6 +95,7 @@ public:
     AssetManager& GetAssets() { return *m_assets; }
     JobSystem& GetJobs() { return *m_jobs; }
     ECS& GetECS() { return *m_ecs; }
+    ScriptSystem& GetScripts() { return *m_scripts; }
     Editor& GetEditor() { return *m_editor; }
     
     // Frame timing
@@ -137,6 +139,7 @@ private:
     std::unique_ptr<Renderer> m_renderer;
     std::unique_ptr<WorldManager> m_world;
     std::unique_ptr<ECS> m_ecs;
+    std::unique_ptr<ScriptSystem> m_scripts;
     std::unique_ptr<Editor> m_editor;
     
     // Game callback

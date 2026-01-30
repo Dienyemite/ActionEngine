@@ -96,7 +96,12 @@ bool Engine::Initialize(const EngineConfig& config) {
     // Connect WorldManager to ECS for transform queries
     m_world->SetECS(m_ecs.get());
     
-    // 7. Editor
+    // 7. Script System
+    m_scripts = std::make_unique<ScriptSystem>();
+    m_scripts->Initialize(m_ecs.get(), &m_platform->GetInput(), 
+                           m_assets.get(), m_world.get(), m_renderer.get());
+    
+    // 8. Editor
     m_editor = std::make_unique<Editor>();
     EditorConfig editor_config{};
     editor_config.dark_theme = true;
@@ -122,6 +127,8 @@ void Engine::Shutdown() {
     // Shutdown in reverse order
     // Editor must shutdown before Renderer
     if (m_editor) m_editor->Shutdown();
+    // Scripts must shutdown before ECS
+    if (m_scripts) m_scripts->Shutdown();
     // AssetManager must shutdown before Renderer (which owns VulkanContext)
     if (m_ecs) m_ecs->Shutdown();
     if (m_world) m_world->Shutdown();
@@ -328,6 +335,13 @@ void Engine::Update(float dt) {
     {
         PROFILE_SCOPE("ECS::Update");
         m_ecs->Update(dt);
+    }
+    
+    // Update scripts (OnUpdate, LateUpdate)
+    {
+        PROFILE_SCOPE("Scripts::Update");
+        m_scripts->Update(dt);
+        m_scripts->LateUpdate(dt);
     }
     
     // Execute pending jobs
