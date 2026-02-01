@@ -41,6 +41,7 @@ add_subdirectory(engine/gameplay)
 add_subdirectory(engine/scripting)
 add_subdirectory(engine/serialization)
 add_subdirectory(engine/editor)
+add_subdirectory(engine/project)
 
 # Main engine library
 add_library(ActionEngine STATIC
@@ -63,6 +64,7 @@ target_link_libraries(ActionEngine PUBLIC
     EngineGameplay
     EngineScripting
     EngineEditor
+    EngineProject
 )
 
 target_include_directories(ActionEngine PUBLIC

@@ -464,6 +464,26 @@ std::string Platform::SaveFileDialog(const std::string& title, const std::string
     return "";
 }
 
+std::string Platform::OpenFolderDialog(const std::string& title, const std::string& default_path) {
+    char folder[MAX_PATH] = {0};
+    
+    BROWSEINFOA bi = {};
+    bi.hwndOwner = m_hwnd;
+    bi.lpszTitle = title.c_str();
+    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_EDITBOX;
+    
+    LPITEMIDLIST pidl = SHBrowseForFolderA(&bi);
+    if (pidl) {
+        if (SHGetPathFromIDListA(pidl, folder)) {
+            CoTaskMemFree(pidl);
+            return std::string(folder);
+        }
+        CoTaskMemFree(pidl);
+    }
+    
+    return "";
+}
+
 #endif // PLATFORM_WINDOWS
 
 } // namespace action
