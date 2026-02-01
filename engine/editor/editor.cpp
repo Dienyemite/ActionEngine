@@ -8,6 +8,7 @@
 #include "commands/editor_commands.h"
 #include <imgui/imgui.h>
 #include <algorithm>
+#include <filesystem>
 
 namespace action {
 
@@ -1280,12 +1281,15 @@ bool Editor::OpenProject(const std::string& path) {
         
         Log("Opened project: " + m_active_project->GetName(), 0);
         
-        // Load default scene if available
+        // Load default scene if available and file exists
         const auto& scenes = m_active_project->GetScenes();
         if (!scenes.empty()) {
             std::string scene_path = m_active_project->GetScenePath(scenes[0]);
-            if (!scene_path.empty()) {
+            if (!scene_path.empty() && std::filesystem::exists(scene_path)) {
                 LoadScene(scene_path);
+            } else {
+                // Scene is in project list but file doesn't exist yet - that's ok for new projects
+                Log("Starting with empty scene (no saved scene file)", 0);
             }
         }
         
