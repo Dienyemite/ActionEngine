@@ -16,6 +16,7 @@
 #include "project/project.h"
 #include "project/scene_serializer.h"
 #include <memory>
+#include <functional>
 
 namespace action {
 
@@ -158,6 +159,11 @@ private:
     void DrawAddNodePopup();
     void DrawSavePrefabPopup();
     void DrawNewProjectPopup();
+    void DrawUnsavedChangesPopup();
+    
+    // Helper to check for unsaved changes before action
+    void PromptSaveBeforeAction(std::function<void()> on_proceed);
+    void ClearCurrentScene();
     
     // Create mesh handles for primitives (cached)
     void CreatePrimitiveMeshes();
@@ -191,9 +197,13 @@ private:
     bool m_show_add_node_popup = false;
     bool m_show_save_prefab_popup = false;
     bool m_show_new_project_popup = false;
+    bool m_show_unsaved_changes_popup = false;
     char m_prefab_name_buffer[128] = "";
     char m_new_project_name[128] = "MyProject";
     char m_new_project_path[512] = "";
+    
+    // Pending action after save confirmation
+    std::function<void()> m_pending_action;
     
     // Project management
     std::unique_ptr<Project> m_active_project;
