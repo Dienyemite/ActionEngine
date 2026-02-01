@@ -82,6 +82,19 @@ struct alignas(16) vec4 {
     vec4 operator*(float s) const { return {x * s, y * s, z * s, w * s}; }
 };
 
+// Integer vector for spatial hashing, grid coordinates, etc.
+struct ivec3 {
+    i32 x, y, z;
+    
+    ivec3() : x(0), y(0), z(0) {}
+    ivec3(i32 x_, i32 y_, i32 z_) : x(x_), y(y_), z(z_) {}
+    
+    ivec3 operator+(const ivec3& o) const { return {x + o.x, y + o.y, z + o.z}; }
+    ivec3 operator-(const ivec3& o) const { return {x - o.x, y - o.y, z - o.z}; }
+    bool operator==(const ivec3& o) const { return x == o.x && y == o.y && z == o.z; }
+    bool operator!=(const ivec3& o) const { return !(*this == o); }
+};
+
 struct alignas(16) quat {
     float x, y, z, w;
     

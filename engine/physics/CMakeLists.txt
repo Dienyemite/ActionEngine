@@ -1,6 +1,11 @@
 add_library(EnginePhysics STATIC
     physics.h
     physics.cpp
+    collision_shapes.h
+    physics_world.h
+    physics_world.cpp
+    character_controller.h
+    character_controller.cpp
 )
 
 target_include_directories(EnginePhysics PUBLIC
@@ -9,4 +14,5 @@ target_include_directories(EnginePhysics PUBLIC
 
 target_link_libraries(EnginePhysics PUBLIC
     EngineCore
+    EngineGameplay
 )
