@@ -86,17 +86,25 @@ int main() {
     renderer.SetLighting(lighting);
     
     // ========================================
-    // Test Scene: Physics + Scripting Integration
+    // Skip test scene when using project system
+    // Set to false to start with an empty editor
     // ========================================
+    constexpr bool CREATE_TEST_SCENE = false;
+    
     ECS& ecs = engine.GetECS();
     ScriptSystem& scripts = engine.GetScripts();
     PhysicsWorld& physics = engine.GetPhysics();
     AssetManager& assets = engine.GetAssets();
     
-    // Create primitive meshes for test entities
+    // Create primitive meshes (always needed for editor)
     MeshHandle cube_mesh = assets.CreateCubeMesh(1.0f);
-    MeshHandle ground_mesh = assets.CreateCubeMesh(1.0f); // Will be scaled
-    MaterialHandle default_material{0}; // Use default material
+    MeshHandle ground_mesh = assets.CreateCubeMesh(1.0f);
+    MaterialHandle default_material{0};
+    
+    if (CREATE_TEST_SCENE) {
+    // ========================================
+    // Test Scene: Physics + Scripting Integration
+    // ========================================
     
     // --- Create Player Cube ---
     Entity player = ecs.CreateEntity();
@@ -302,6 +310,17 @@ physics.AddCollider(step);
 
     // Start in play mode for testing
     engine.GetEditor().SetPlayMode(true);
+    
+    } // End CREATE_TEST_SCENE block
+    
+    // When no test scene, start in editor mode
+    if (!CREATE_TEST_SCENE) {
+        LOG_INFO("==============================================");
+        LOG_INFO("ActionEngine Editor Mode");
+        LOG_INFO("Use File > New Project to get started");
+        LOG_INFO("==============================================");
+        engine.GetEditor().SetPlayMode(false);
+    }
     
     // Run engine
     engine.Run();
