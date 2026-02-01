@@ -275,7 +275,7 @@ public:
         if (!physics) return;
         
         vec3 pos = GetPosition();
-        auto overlaps = physics->OverlapSphere(pos, 1.0f, static_cast<uint32_t>(trigger_layer));
+        auto overlaps = physics->OverlapSphere(pos, 1.0f, trigger_layer);
         
         for (auto entity : overlaps) {
             if (entity != GetEntity()) {
@@ -321,7 +321,8 @@ public:
         Rotate(vec3{0, 90 * dt, 0});
         
         // Check for player overlap using physics
-        if (auto overlaps = OverlapSphere(pos, pickup_radius, static_cast<uint32_t>(CollisionLayer::Player)); !overlaps.empty()) {
+        auto overlaps = OverlapSphere(pos, pickup_radius);
+        if (!overlaps.empty()) {
             // In a real game, you'd give health to the player here
             Log("Health pickup collected! +" + std::to_string(static_cast<int>(heal_amount)));
             DestroySelf();
@@ -356,8 +357,8 @@ public:
         vec3 pos = GetPosition();
         
         // Raycast ahead to detect hits
-        RaycastHit hit;
-        if (Raycast(pos, m_direction, move_distance + 0.1f, hit, hit_mask)) {
+        RaycastHit hit = Raycast(pos, m_direction, move_distance + 0.1f);
+        if (hit) {
             OnHit(hit);
             DestroySelf();
             return;

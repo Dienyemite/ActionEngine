@@ -164,9 +164,11 @@ void CharacterController::UpdateGroundState(CharacterControllerComponent& contro
                                               const vec3& position) {
     const auto& config = controller.config;
     
-    // Cast down from capsule base
-    vec3 ray_origin = position + vec3{0, config.radius + 0.01f, 0};
-    float ray_dist = config.ground_check_distance + 0.02f;
+    // Cast down from slightly above capsule bottom
+    // The capsule's bottom is at position.y (since center is at position + height/2)
+    // We cast from slightly above the feet to detect ground contact
+    vec3 ray_origin = position + vec3{0, 0.1f, 0};
+    float ray_dist = config.ground_check_distance + 0.15f;  // Check further down
     
     RaycastHit hit = m_world->Raycast(ray_origin, {0, -1, 0}, ray_dist, config.mask);
     
@@ -178,7 +180,7 @@ void CharacterController::UpdateGroundState(CharacterControllerComponent& contro
         
         // Calculate slope angle
         float dot_up = dot(hit.normal, vec3{0, 1, 0});
-        controller.ground.slope_angle = std::acos(Clamp(dot_up, -1.0f, 1.0f)) * RAD_TO_DEG;
+        controller.ground.slope_angle = std::acos(std::clamp(dot_up, -1.0f, 1.0f)) * RAD_TO_DEG;
         
         // Check if slope is too steep
         if (controller.ground.slope_angle > config.slope_limit) {
@@ -280,6 +282,16 @@ void CharacterController::ResolvePenetration(Capsule& capsule, CollisionLayer ma
             
             capsule.center = capsule.center + push_dir * push_dist;
         }
+    }
+}
+
+void CharacterControllerComponent::Jump(float force) {
+    if (ground.grounded || CanCoyoteJump()) {
+        velocity.y = force;
+        time_since_grounded = coyote_time; // Consume coyote time
+    } else {
+        // Buffer the jump input
+        jump_buffer_time = jump_buffer_duration;
     }
 }
 

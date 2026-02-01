@@ -79,15 +79,7 @@ struct CharacterControllerComponent {
         move_input = move_input + direction;
     }
     
-    void Jump(float force) {
-        if (ground.grounded || CanCoyoteJump()) {
-            velocity.y = force;
-            time_since_grounded = coyote_time; // Consume coyote time
-        } else {
-            // Buffer the jump input
-            jump_buffer_time = jump_buffer_duration;
-        }
-    }
+    void Jump(float force);  // Defined in cpp for logging
     
     // Check if we just landed (for landing effects, sounds)
     bool JustLanded() const {
