@@ -26,6 +26,7 @@
 #include "scripting/script_system.h"
 #include "physics/physics_world.h"
 #include "physics/character_controller.h"
+#include "physics/jolt/jolt_physics.h"
 #include "editor/editor.h"
 
 namespace action {
@@ -99,6 +100,7 @@ public:
     ECS& GetECS() { return *m_ecs; }
     ScriptSystem& GetScripts() { return *m_scripts; }
     PhysicsWorld& GetPhysics() { return *m_physics; }
+    JoltPhysics& GetJoltPhysics() { return *m_jolt_physics; }
     CharacterController& GetCharacterController() { return *m_character_controller; }
     Editor& GetEditor() { return *m_editor; }
     
@@ -144,6 +146,7 @@ private:
     std::unique_ptr<WorldManager> m_world;
     std::unique_ptr<ECS> m_ecs;
     std::unique_ptr<PhysicsWorld> m_physics;
+    std::unique_ptr<JoltPhysics> m_jolt_physics;
     std::unique_ptr<CharacterController> m_character_controller;
     std::unique_ptr<ScriptSystem> m_scripts;
     std::unique_ptr<Editor> m_editor;

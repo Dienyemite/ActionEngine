@@ -98,10 +98,20 @@ bool Engine::Initialize(const EngineConfig& config) {
     // Connect WorldManager to ECS for transform queries
     m_world->SetECS(m_ecs.get());
     
-    // 7. Physics World
+    // 7. Physics World (legacy - spatial queries)
     m_physics = std::make_unique<PhysicsWorld>();
     if (!m_physics->Initialize(m_ecs.get(), 4.0f)) {
         LOG_ERROR("Failed to initialize PhysicsWorld");
+        return false;
+    }
+    
+    // 7b. Jolt Physics (rigidbody simulation)
+    m_jolt_physics = std::make_unique<JoltPhysics>();
+    JoltPhysicsConfig jolt_config;
+    jolt_config.gravity = {0, -25.0f, 0};  // Higher gravity for weighty feel
+    jolt_config.num_threads = config.worker_thread_count;
+    if (!m_jolt_physics->Initialize(m_ecs.get(), jolt_config)) {
+        LOG_ERROR("Failed to initialize JoltPhysics");
         return false;
     }
     
@@ -143,7 +153,8 @@ void Engine::Shutdown() {
     if (m_editor) m_editor->Shutdown();
     // Scripts must shutdown before ECS
     if (m_scripts) m_scripts->Shutdown();
-    // Physics
+    // Physics (Jolt first, then legacy)
+    if (m_jolt_physics) m_jolt_physics->Shutdown();
     if (m_physics) m_physics->Shutdown();
     // AssetManager must shutdown before Renderer (which owns VulkanContext)
     if (m_ecs) m_ecs->Shutdown();
@@ -427,11 +438,16 @@ void Engine::Update(float dt) {
         m_ecs->Update(dt);
     }
     
-    // Update physics (spatial hash, character controllers)
+    // Update physics (spatial hash, character controllers, Jolt simulation)
     {
         PROFILE_SCOPE("Physics::Update");
         m_physics->UpdateSpatialHash();
         m_character_controller->Update(dt);
+        
+        // Jolt Physics simulation
+        m_jolt_physics->SyncToPhysics();   // Sync kinematic bodies to Jolt
+        m_jolt_physics->Update(dt);         // Step simulation
+        m_jolt_physics->SyncFromPhysics(); // Sync dynamic bodies back to ECS
     }
     
     // Update scripts (OnUpdate, LateUpdate)
