@@ -1180,6 +1180,16 @@ void Editor::DrawNewProjectPopup() {
             if (strlen(m_new_project_name) > 0 && strlen(m_new_project_path) > 0) {
                 auto project = Project::Create(m_new_project_name, m_new_project_path);
                 if (project) {
+                    // Clear existing scene content
+                    for (auto& child : m_scene_root.children) {
+                        if (child.entity != INVALID_ENTITY && m_ecs->IsAlive(child.entity)) {
+                            m_ecs->DestroyEntity(child.entity);
+                        }
+                    }
+                    m_scene_root.children.clear();
+                    m_selected_node_id = 0;
+                    m_selected_node_ids.clear();
+                    
                     m_active_project = std::move(project);
                     m_current_scene_path.clear();
                     m_scene_modified = false;
@@ -1223,6 +1233,16 @@ bool Editor::OpenProject(const std::string& path) {
         if (m_active_project) {
             m_active_project->Close();
         }
+        
+        // Clear existing scene content before loading new project
+        for (auto& child : m_scene_root.children) {
+            if (child.entity != INVALID_ENTITY && m_ecs->IsAlive(child.entity)) {
+                m_ecs->DestroyEntity(child.entity);
+            }
+        }
+        m_scene_root.children.clear();
+        m_selected_node_id = 0;
+        m_selected_node_ids.clear();
         
         m_active_project = std::move(project);
         m_current_scene_path.clear();
