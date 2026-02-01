@@ -16,6 +16,7 @@ class AssetManager;
 class WorldManager;
 class Renderer;
 class ECS;
+class PhysicsWorld;
 
 /*
  * ScriptComponent - Holds scripts attached to an entity
@@ -114,7 +115,8 @@ public:
     
     // Initialize with engine references
     void Initialize(ECS* ecs, Input* input, AssetManager* assets, 
-                    WorldManager* world, Renderer* renderer);
+                    WorldManager* world, Renderer* renderer,
+                    PhysicsWorld* physics);
     void Shutdown();
     
     // Attach a script to an entity
@@ -132,7 +134,7 @@ public:
         T* ptr = script.get();
         
         // Set context
-        script->SetContext(entity, m_ecs, m_input, m_assets, m_world, m_renderer);
+        script->SetContext(entity, m_ecs, m_input, m_assets, m_world, m_renderer, m_physics);
         script->OnCreate();
         
         comp->scripts.push_back(std::move(script));
@@ -178,6 +180,7 @@ private:
     AssetManager* m_assets = nullptr;
     WorldManager* m_world = nullptr;
     Renderer* m_renderer = nullptr;
+    PhysicsWorld* m_physics = nullptr;
     
     // Scripts that need OnStart called
     std::vector<Script*> m_pending_start;

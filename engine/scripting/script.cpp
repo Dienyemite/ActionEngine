@@ -1,6 +1,7 @@
 #include "script.h"
 #include "core/logging.h"
 #include "gameplay/ecs/ecs.h"
+#include "physics/physics_world.h"
 
 namespace action {
 
@@ -137,6 +138,20 @@ void Script::Destroy(Entity entity, float delay) {
 
 void Script::DestroySelf(float delay) {
     Destroy(m_entity, delay);
+}
+
+RaycastHit Script::Raycast(const vec3& origin, const vec3& direction, float max_distance) {
+    if (m_physics) {
+        return m_physics->Raycast(origin, direction, max_distance);
+    }
+    return RaycastHit{};
+}
+
+std::vector<Entity> Script::OverlapSphere(const vec3& center, float radius) {
+    if (m_physics) {
+        return m_physics->OverlapSphere(center, radius);
+    }
+    return {};
 }
 
 } // namespace action

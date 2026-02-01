@@ -24,6 +24,8 @@
 #include "assets/asset_manager.h"
 #include "gameplay/ecs/ecs.h"
 #include "scripting/script_system.h"
+#include "physics/physics_world.h"
+#include "physics/character_controller.h"
 #include "editor/editor.h"
 
 namespace action {
@@ -96,6 +98,8 @@ public:
     JobSystem& GetJobs() { return *m_jobs; }
     ECS& GetECS() { return *m_ecs; }
     ScriptSystem& GetScripts() { return *m_scripts; }
+    PhysicsWorld& GetPhysics() { return *m_physics; }
+    CharacterController& GetCharacterController() { return *m_character_controller; }
     Editor& GetEditor() { return *m_editor; }
     
     // Frame timing
@@ -139,6 +143,8 @@ private:
     std::unique_ptr<Renderer> m_renderer;
     std::unique_ptr<WorldManager> m_world;
     std::unique_ptr<ECS> m_ecs;
+    std::unique_ptr<PhysicsWorld> m_physics;
+    std::unique_ptr<CharacterController> m_character_controller;
     std::unique_ptr<ScriptSystem> m_scripts;
     std::unique_ptr<Editor> m_editor;
     
