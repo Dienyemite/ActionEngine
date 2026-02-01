@@ -141,6 +141,11 @@ int main() {
     player_script->sprint_multiplier = 1.6f;
     player_script->jump_force = 10.0f;
     
+    // Add rigidbody for Jolt collision (kinematic - moved by CharacterController)
+    auto& player_rb = ecs.AddComponent<RigidbodyComponent>(player);
+    player_rb.is_kinematic = true;  // Player is controlled by CharacterController, not physics
+    player_rb.mass = 80.0f;         // 80 kg player for realistic pushes
+    
     LOG_INFO("Created player entity with PlayerController script");
     
     // --- Create Ground Plane (large box collider) ---
@@ -201,6 +206,58 @@ int main() {
     
     LOG_INFO("Created 5 obstacle boxes");
     
+    // --- Create Dynamic Rigidbody Boxes (for Jolt physics testing) ---
+    JoltPhysics& jolt = engine.GetJoltPhysics();
+    
+    for (int i = 0; i < 10; ++i) {
+        Entity dyn_box = ecs.CreateEntity();
+        
+        // Stacked and offset for interesting physics
+        float x = (i % 5) * 1.2f - 2.4f;
+        float y = 5.0f + (i / 5) * 1.2f;  // Start above ground
+        float z = 5.0f + (i % 3) * 0.3f;  // Slight offset for tumbling
+        
+        auto& dyn_transform = ecs.AddComponent<TransformComponent>(dyn_box);
+        dyn_transform.position = {x, y, z};
+        dyn_transform.scale = {1, 1, 1};
+        
+        auto& dyn_tag = ecs.AddComponent<TagComponent>(dyn_box);
+        dyn_tag.name = "DynamicBox_" + std::to_string(i);
+        dyn_tag.tags = Tags::Dynamic | Tags::Prop;
+        
+        // Render component
+        auto& dyn_render = ecs.AddComponent<RenderComponent>(dyn_box);
+        dyn_render.mesh = cube_mesh;
+        dyn_render.material = default_material;
+        dyn_render.visible = true;
+        
+        auto& dyn_collider = ecs.AddComponent<ColliderComponent>(dyn_box);
+        dyn_collider.type = ColliderType::Box;
+        dyn_collider.half_extents = {0.5f, 0.5f, 0.5f};
+        dyn_collider.layer = CollisionLayer::Default;
+        dyn_collider.is_static = false;
+        
+        // Rigidbody component for physics simulation
+        auto& dyn_rb = ecs.AddComponent<RigidbodyComponent>(dyn_box);
+        dyn_rb.mass = 10.0f;              // 10 kg boxes
+        dyn_rb.friction = 0.6f;           // Moderate friction
+        dyn_rb.restitution = 0.2f;        // Low bounce (weighty)
+        dyn_rb.linear_damping = 0.05f;    // Slight air resistance
+        dyn_rb.angular_damping = 0.1f;    // Dampens spinning
+        dyn_rb.gravity_factor = 1.0f;     // Full gravity
+        
+        // Create Jolt body for this entity
+        jolt.CreateBody(dyn_box, true);  // true = dynamic
+    }
+    
+    LOG_INFO("Created 10 dynamic rigidbody boxes (Jolt Physics)");
+    
+    // --- Create a static ground body in Jolt too ---
+    jolt.CreateBody(ground, false);  // false = static
+    
+    // --- Create kinematic player body in Jolt (for pushing dynamic objects) ---
+    jolt.CreateBody(player, true);   // true = dynamic (but is_kinematic in RigidbodyComponent)
+    
     // --- Create a step/platform for testing step-up ---
     Entity step = ecs.CreateEntity();
     
@@ -225,6 +282,7 @@ int main() {
     step_collider.is_static = true;
     
 physics.AddCollider(step);
+    jolt.CreateBody(step, false);  // Static in Jolt
     
     LOG_INFO("Created step platform for step-up testing");
     

@@ -144,24 +144,28 @@ struct ColliderComponent {
 };
 
 /*
- * RigidbodyComponent - For dynamic physics objects (not characters)
+ * RigidbodyComponent - For dynamic physics objects (simulated by Jolt)
  * 
- * Used for props, debris, thrown objects - NOT player movement
+ * Used for props, debris, thrown objects - NOT player movement.
+ * Add this component to enable physics simulation.
  */
 struct RigidbodyComponent {
+    // Velocity (read from physics, can be set to add impulse)
     vec3 velocity{0, 0, 0};
     vec3 angular_velocity{0, 0, 0};
     
-    float mass = 1.0f;
-    float drag = 0.1f;
-    float angular_drag = 0.05f;
-    float bounciness = 0.3f;
-    float friction = 0.5f;
+    // Physical properties (used when creating Jolt body)
+    float mass = 1.0f;              // Mass in kg
+    float friction = 0.5f;          // Surface friction [0-1]
+    float restitution = 0.3f;       // Bounciness [0-1]
+    float linear_damping = 0.05f;   // Velocity damping (weighty feel)
+    float angular_damping = 0.05f;  // Rotation damping
+    float gravity_factor = 1.0f;    // Gravity multiplier (0 = no gravity)
     
-    bool use_gravity = true;
-    bool is_kinematic = false;  // Kinematic = moved by code, not physics
+    bool is_kinematic = false;      // Kinematic = moved by code, not physics
+    bool use_ccd = false;           // Continuous collision detection (for fast objects)
     
-    // Accumulated forces for this frame
+    // Legacy: accumulated forces for this frame (deprecated, use Jolt)
     vec3 force{0, 0, 0};
     vec3 torque{0, 0, 0};
     

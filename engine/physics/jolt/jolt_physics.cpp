@@ -255,8 +255,15 @@ void JoltPhysics::SyncToPhysics() {
         
         // Only sync kinematic bodies from ECS (dynamic bodies are controlled by physics)
         if (body_interface.GetMotionType(body_id) == JPH::EMotionType::Kinematic) {
-            body_interface.SetPosition(body_id, ToJoltR(transform->position), JPH::EActivation::DontActivate);
-            // Could also sync rotation here
+            // Activate the body so it can interact with dynamic objects
+            body_interface.ActivateBody(body_id);
+            
+            // Use MoveKinematic instead of SetPosition - this properly pushes dynamic bodies
+            // by calculating velocity needed to reach target position
+            JPH::RVec3 target_pos = ToJoltR(transform->position);
+            JPH::Quat target_rot = JPH::Quat::sIdentity();  // TODO: Support rotation
+            
+            body_interface.MoveKinematic(body_id, target_pos, target_rot, FIXED_TIMESTEP);
         }
     }
 }
@@ -315,8 +322,21 @@ JPH::BodyID JoltPhysics::CreateBody(Entity entity, bool is_dynamic) {
         return JPH::BodyID();
     }
     
+    // Check for RigidbodyComponent - if present, use its properties
+    auto* rigidbody = m_ecs->GetComponent<RigidbodyComponent>(entity);
+    
     // Create shape from collider
     JPH::RefConst<JPH::Shape> shape = CreateShapeFromCollider(*collider);
+    
+    // Determine motion type
+    JPH::EMotionType motion_type = JPH::EMotionType::Static;
+    if (is_dynamic) {
+        if (rigidbody && rigidbody->is_kinematic) {
+            motion_type = JPH::EMotionType::Kinematic;
+        } else {
+            motion_type = JPH::EMotionType::Dynamic;
+        }
+    }
     
     // Determine object layer
     JPH::ObjectLayer layer = Layers::DYNAMIC;
@@ -333,17 +353,38 @@ JPH::BodyID JoltPhysics::CreateBody(Entity entity, bool is_dynamic) {
         shape,
         ToJoltR(transform->position),
         JPH::Quat::sIdentity(),  // TODO: Support rotation
-        is_dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
+        motion_type,
         layer
     );
     
-    // Set physics properties
+    // Set physics properties from RigidbodyComponent or defaults
     if (is_dynamic) {
-        body_settings.mFriction = 0.5f;
-        body_settings.mRestitution = 0.3f;
-        body_settings.mLinearDamping = 0.05f;      // Slight damping for weighty feel
-        body_settings.mAngularDamping = 0.05f;
-        body_settings.mGravityFactor = 1.0f;
+        if (rigidbody) {
+            // Use RigidbodyComponent properties
+            body_settings.mFriction = rigidbody->friction;
+            body_settings.mRestitution = rigidbody->restitution;
+            body_settings.mLinearDamping = rigidbody->linear_damping;
+            body_settings.mAngularDamping = rigidbody->angular_damping;
+            body_settings.mGravityFactor = rigidbody->gravity_factor;
+            
+            // Override mass calculation if mass is specified
+            if (rigidbody->mass > 0.001f) {
+                body_settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+                body_settings.mMassPropertiesOverride.mMass = rigidbody->mass;
+            }
+            
+            // CCD for fast-moving objects
+            if (rigidbody->use_ccd) {
+                body_settings.mMotionQuality = JPH::EMotionQuality::LinearCast;
+            }
+        } else {
+            // Default dynamic properties for entities without RigidbodyComponent
+            body_settings.mFriction = 0.5f;
+            body_settings.mRestitution = 0.3f;
+            body_settings.mLinearDamping = 0.05f;
+            body_settings.mAngularDamping = 0.05f;
+            body_settings.mGravityFactor = 1.0f;
+        }
     }
     
     // Create the body
@@ -363,8 +404,12 @@ JPH::BodyID JoltPhysics::CreateBody(Entity entity, bool is_dynamic) {
     // Store entity as user data
     body_interface.SetUserData(body_id, static_cast<JPH::uint64>(entity));
     
-    LOG_INFO("[JoltPhysics] Created {} body for entity {}", 
-             is_dynamic ? "dynamic" : "static", entity);
+    const char* motion_str = "static";
+    if (motion_type == JPH::EMotionType::Kinematic) motion_str = "kinematic";
+    else if (motion_type == JPH::EMotionType::Dynamic) motion_str = "dynamic";
+    
+    LOG_INFO("[JoltPhysics] Created {} body for entity {} (layer: {})", 
+             motion_str, entity, static_cast<int>(layer));
     
     return body_id;
 }
