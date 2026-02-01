@@ -251,6 +251,9 @@ void Editor::Update(float dt) {
     // Draw New Project popup if requested
     DrawNewProjectPopup();
     
+    // Draw unsaved changes confirmation popup
+    DrawUnsavedChangesPopup();
+    
     // Draw shader graph editor
     m_shader_graph_editor->Draw(*m_renderer);
     
@@ -400,10 +403,24 @@ void Editor::DrawMenuBar() {
                                  "%s\\Documents\\ActionEngine Projects", userprofile);
                     }
                 #endif
-                m_show_new_project_popup = true;
+                
+                // Check for unsaved changes
+                if (m_scene_modified && m_active_project) {
+                    PromptSaveBeforeAction([this]() {
+                        m_show_new_project_popup = true;
+                    });
+                } else {
+                    m_show_new_project_popup = true;
+                }
             }
             if (ImGui::MenuItem("Open Project...", "Ctrl+Shift+O")) {
-                OpenProject();
+                if (m_scene_modified && m_active_project) {
+                    PromptSaveBeforeAction([this]() {
+                        OpenProject();
+                    });
+                } else {
+                    OpenProject();
+                }
             }
             
             // Recent projects submenu
@@ -414,7 +431,14 @@ void Editor::DrawMenuBar() {
                 } else {
                     for (const auto& proj : recent) {
                         if (ImGui::MenuItem(proj.name.c_str())) {
-                            OpenProject(proj.path);
+                            std::string path_copy = proj.path;  // Copy for lambda capture
+                            if (m_scene_modified && m_active_project) {
+                                PromptSaveBeforeAction([this, path_copy]() {
+                                    OpenProject(path_copy);
+                                });
+                            } else {
+                                OpenProject(proj.path);
+                            }
                         }
                         if (ImGui::IsItemHovered()) {
                             ImGui::SetTooltip("%s", proj.path.c_str());
@@ -433,17 +457,19 @@ void Editor::DrawMenuBar() {
             // Scene management
             bool has_project = HasActiveProject();
             if (ImGui::MenuItem("New Scene", "Ctrl+N", false, has_project)) {
-                // Clear all children from scene root
-                for (auto& child : m_scene_root.children) {
-                    if (child.entity != INVALID_ENTITY) {
-                        m_ecs->DestroyEntity(child.entity);
-                    }
+                if (m_scene_modified) {
+                    PromptSaveBeforeAction([this]() {
+                        ClearCurrentScene();
+                        m_current_scene_path.clear();
+                        m_scene_modified = false;
+                        Log("Created new scene", 0);
+                    });
+                } else {
+                    ClearCurrentScene();
+                    m_current_scene_path.clear();
+                    m_scene_modified = false;
+                    Log("Created new scene", 0);
                 }
-                m_scene_root.children.clear();
-                m_selected_node_id = 0;
-                m_current_scene_path.clear();
-                m_scene_modified = false;
-                Log("Created new scene", 0);
             }
             if (ImGui::MenuItem("Open Scene...", "Ctrl+O", false, has_project)) {
                 std::string filter = "Scene Files|*.aescene|All Files|*.*";
@@ -935,6 +961,9 @@ EditorNode* Editor::AddNode(const std::string& type, EditorNode* parent) {
     // Select the new node
     m_selected_node_id = node.id;
     
+    // Mark scene as modified
+    m_scene_modified = true;
+    
     return &parent->children.back();
 }
 
@@ -961,6 +990,7 @@ void Editor::DeleteNode(u32 node_id) {
     
     if (delete_from_parent(m_scene_root)) {
         m_selected_node_id = 0;
+        m_scene_modified = true;
         LOG_INFO("Deleted node {}", node_id);
     }
 }
@@ -1338,6 +1368,77 @@ bool Editor::LoadScene(const std::string& path) {
     
     Log("Failed to load scene: " + path, 2);
     return false;
+}
+
+// ============================================================================
+// Helper Methods
+// ============================================================================
+
+void Editor::ClearCurrentScene() {
+    for (auto& child : m_scene_root.children) {
+        if (child.entity != INVALID_ENTITY && m_ecs->IsAlive(child.entity)) {
+            m_ecs->DestroyEntity(child.entity);
+        }
+    }
+    m_scene_root.children.clear();
+    m_selected_node_id = 0;
+    m_selected_node_ids.clear();
+}
+
+void Editor::PromptSaveBeforeAction(std::function<void()> on_proceed) {
+    m_pending_action = on_proceed;
+    m_show_unsaved_changes_popup = true;
+}
+
+void Editor::DrawUnsavedChangesPopup() {
+    if (m_show_unsaved_changes_popup) {
+        ImGui::OpenPopup("Unsaved Changes");
+    }
+    
+    ImGui::SetNextWindowSize(ImVec2(400, 150), ImGuiCond_FirstUseEver);
+    if (ImGui::BeginPopupModal("Unsaved Changes", &m_show_unsaved_changes_popup, ImGuiWindowFlags_NoResize)) {
+        ImGui::TextWrapped("You have unsaved changes. Would you like to save before continuing?");
+        ImGui::Spacing();
+        ImGui::Spacing();
+        
+        ImGui::Separator();
+        
+        // Save button
+        if (ImGui::Button("Save", ImVec2(100, 0))) {
+            if (SaveScene()) {
+                m_show_unsaved_changes_popup = false;
+                ImGui::CloseCurrentPopup();
+                if (m_pending_action) {
+                    m_pending_action();
+                    m_pending_action = nullptr;
+                }
+            }
+        }
+        
+        ImGui::SameLine();
+        
+        // Don't Save button
+        if (ImGui::Button("Don't Save", ImVec2(100, 0))) {
+            m_scene_modified = false;  // Discard changes
+            m_show_unsaved_changes_popup = false;
+            ImGui::CloseCurrentPopup();
+            if (m_pending_action) {
+                m_pending_action();
+                m_pending_action = nullptr;
+            }
+        }
+        
+        ImGui::SameLine();
+        
+        // Cancel button
+        if (ImGui::Button("Cancel", ImVec2(100, 0))) {
+            m_show_unsaved_changes_popup = false;
+            m_pending_action = nullptr;
+            ImGui::CloseCurrentPopup();
+        }
+        
+        ImGui::EndPopup();
+    }
 }
 
 } // namespace action
