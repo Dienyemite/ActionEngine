@@ -14,6 +14,8 @@ class AssetManager;
 class WorldManager;
 class Renderer;
 class ScriptSystem;
+class PhysicsWorld;
+struct RaycastHit;
 
 /*
  * Script - Base class for all game scripts
@@ -130,6 +132,11 @@ public:
     WorldManager* GetWorld() const { return m_world; }
     Renderer* GetRenderer() const { return m_renderer; }
     ECS* GetECS() const { return m_ecs; }
+    PhysicsWorld* GetPhysics() const { return m_physics; }
+    
+    // Physics helpers (shortcuts for common operations)
+    RaycastHit Raycast(const vec3& origin, const vec3& direction, float max_distance = 100.0f);
+    std::vector<Entity> OverlapSphere(const vec3& center, float radius);
     
     // Logging
     void Log(const std::string& message);
@@ -148,13 +155,15 @@ protected:
     
     // Set by ScriptSystem when attaching
     void SetContext(Entity entity, ECS* ecs, Input* input, 
-                    AssetManager* assets, WorldManager* world, Renderer* renderer) {
+                    AssetManager* assets, WorldManager* world, Renderer* renderer,
+                    PhysicsWorld* physics) {
         m_entity = entity;
         m_ecs = ecs;
         m_input = input;
         m_assets = assets;
         m_world = world;
         m_renderer = renderer;
+        m_physics = physics;
     }
     
     Entity m_entity = INVALID_ENTITY;
@@ -163,6 +172,7 @@ protected:
     AssetManager* m_assets = nullptr;
     WorldManager* m_world = nullptr;
     Renderer* m_renderer = nullptr;
+    PhysicsWorld* m_physics = nullptr;
     
     bool m_enabled = true;
     bool m_started = false;

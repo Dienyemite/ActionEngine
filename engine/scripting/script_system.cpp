@@ -1,16 +1,19 @@
 #include "script_system.h"
 #include "../gameplay/ecs/ecs.h"
 #include "../core/logging.h"
+#include "../physics/physics_world.h"
 
 namespace action {
 
 void ScriptSystem::Initialize(ECS* ecs, Input* input, AssetManager* assets,
-                               WorldManager* world, Renderer* renderer) {
+                               WorldManager* world, Renderer* renderer,
+                               PhysicsWorld* physics) {
     m_ecs = ecs;
     m_input = input;
     m_assets = assets;
     m_world = world;
     m_renderer = renderer;
+    m_physics = physics;
     
     LOG_INFO("[ScriptSystem] Initialized");
 }
@@ -50,7 +53,7 @@ Script* ScriptSystem::AddScript(Entity entity, const std::string& type_name) {
     Script* ptr = script.get();
     
     // Set context and call OnCreate
-    script->SetContext(entity, m_ecs, m_input, m_assets, m_world, m_renderer);
+    script->SetContext(entity, m_ecs, m_input, m_assets, m_world, m_renderer, m_physics);
     script->OnCreate();
     
     comp->scripts.push_back(std::move(script));

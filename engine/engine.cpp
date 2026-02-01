@@ -96,12 +96,24 @@ bool Engine::Initialize(const EngineConfig& config) {
     // Connect WorldManager to ECS for transform queries
     m_world->SetECS(m_ecs.get());
     
-    // 7. Script System
+    // 7. Physics World
+    m_physics = std::make_unique<PhysicsWorld>();
+    if (!m_physics->Initialize(m_ecs.get(), 4.0f)) {
+        LOG_ERROR("Failed to initialize PhysicsWorld");
+        return false;
+    }
+    
+    // 8. Character Controller
+    m_character_controller = std::make_unique<CharacterController>();
+    m_character_controller->Initialize(m_physics.get(), m_ecs.get());
+    
+    // 9. Script System
     m_scripts = std::make_unique<ScriptSystem>();
     m_scripts->Initialize(m_ecs.get(), &m_platform->GetInput(), 
-                           m_assets.get(), m_world.get(), m_renderer.get());
+                           m_assets.get(), m_world.get(), m_renderer.get(),
+                           m_physics.get());
     
-    // 8. Editor
+    // 10. Editor
     m_editor = std::make_unique<Editor>();
     EditorConfig editor_config{};
     editor_config.dark_theme = true;
@@ -129,6 +141,8 @@ void Engine::Shutdown() {
     if (m_editor) m_editor->Shutdown();
     // Scripts must shutdown before ECS
     if (m_scripts) m_scripts->Shutdown();
+    // Physics
+    if (m_physics) m_physics->Shutdown();
     // AssetManager must shutdown before Renderer (which owns VulkanContext)
     if (m_ecs) m_ecs->Shutdown();
     if (m_world) m_world->Shutdown();
@@ -335,6 +349,13 @@ void Engine::Update(float dt) {
     {
         PROFILE_SCOPE("ECS::Update");
         m_ecs->Update(dt);
+    }
+    
+    // Update physics (spatial hash, character controllers)
+    {
+        PROFILE_SCOPE("Physics::Update");
+        m_physics->UpdateSpatialHash();
+        m_character_controller->Update(dt);
     }
     
     // Update scripts (OnUpdate, LateUpdate)
