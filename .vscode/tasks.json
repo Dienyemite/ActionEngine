@@ -32,6 +32,48 @@
             "command": "git add -A; git commit -m '${input:commitMessage}'; git push",
             "group": "none",
             "problemMatcher": []
+        },
+        {
+            "label": "Git: Start Feature",
+            "type": "shell",
+            "command": "powershell -ExecutionPolicy Bypass -File ${workspaceFolder}/scripts/git-start-feature.ps1 -FeatureName '${input:featureName}'",
+            "group": "none",
+            "problemMatcher": []
+        },
+        {
+            "label": "Git: Finish Feature",
+            "type": "shell",
+            "command": "powershell -ExecutionPolicy Bypass -File ${workspaceFolder}/scripts/git-finish-feature.ps1 -FeatureName '${input:featureName}'",
+            "group": "none",
+            "problemMatcher": []
+        },
+        {
+            "label": "Git: Start Release",
+            "type": "shell",
+            "command": "powershell -ExecutionPolicy Bypass -File ${workspaceFolder}/scripts/git-start-release.ps1 -Version '${input:versionNumber}'",
+            "group": "none",
+            "problemMatcher": []
+        },
+        {
+            "label": "Git: Start Hotfix",
+            "type": "shell",
+            "command": "powershell -ExecutionPolicy Bypass -File ${workspaceFolder}/scripts/git-hotfix.ps1 -HotfixName '${input:hotfixName}' -Action start",
+            "group": "none",
+            "problemMatcher": []
+        },
+        {
+            "label": "Git: Finish Hotfix",
+            "type": "shell",
+            "command": "powershell -ExecutionPolicy Bypass -File ${workspaceFolder}/scripts/git-hotfix.ps1 -HotfixName '${input:hotfixName}' -Action finish -Version '${input:versionNumber}'",
+            "group": "none",
+            "problemMatcher": []
+        },
+        {
+            "label": "Git: Flow Status",
+            "type": "shell",
+            "command": "powershell -ExecutionPolicy Bypass -File ${workspaceFolder}/scripts/git-status.ps1",
+            "group": "none",
+            "problemMatcher": []
         }
     ],
     "inputs": [
@@ -40,6 +82,24 @@
             "type": "promptString",
             "description": "Enter commit message",
             "default": "Update engine code"
+        },
+        {
+            "id": "featureName",
+            "type": "promptString",
+            "description": "Feature name (without 'feature/' prefix)",
+            "default": "new-feature"
+        },
+        {
+            "id": "versionNumber",
+            "type": "promptString",
+            "description": "Version number (e.g., 1.0.0)",
+            "default": "0.1.0"
+        },
+        {
+            "id": "hotfixName",
+            "type": "promptString",
+            "description": "Hotfix name (without 'hotfix/' prefix)",
+            "default": "fix-name"
         }
     ]
 }
