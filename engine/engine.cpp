@@ -1,6 +1,8 @@
 #include "engine.h"
 #include "core/logging.h"
 #include "core/profiler.h"
+#include "scripting/script_system.h"
+#include "scripting/builtin_scripts.h"
 #include <chrono>
 #include <cmath>
 
@@ -206,119 +208,193 @@ void Engine::Update(float dt) {
     // Begin editor frame (for ImGui input)
     m_editor->BeginFrame();
     
-    // ========================================
-    // Camera Controls (Blender/Godot style)
-    // - Right-click drag: Orbit/rotate around pivot
-    // - Middle-click drag: Pan camera
-    // - Scroll wheel: Zoom in/out
-    // ========================================
-    
-    // Camera orbit parameters (persistent state - outside conditional so always accessible)
-    static vec3 pivot_point{0, 0, 0};       // Point camera orbits around
-    static float orbit_distance = 10.0f;     // Distance from pivot
-    static float orbit_yaw = 0.0f;           // Horizontal angle
-    static float orbit_pitch = 0.3f;         // Vertical angle (start slightly above)
-    
     Input& input = m_platform->GetInput();
     Camera& camera = m_renderer->GetCamera();
     const MouseState& mouse = input.GetMouse();
     
-    // Check if gizmo is being manipulated - don't process camera input then
-    bool gizmo_active = m_editor->IsGizmoManipulating();
-    
-    // Process camera input only when:
-    // 1. Gizmo is not being manipulated
-    // 2. Right-click/middle-click for orbit/pan (always allow these)
-    // 3. Or when ImGui doesn't want input for other controls
-    if (!gizmo_active) {
-        // Escape to exit
-        if (input.IsKeyPressed(Key::Escape)) {
-            RequestExit();
-        }
-        
-        // Right-click drag: Orbit camera around pivot
-        if (input.IsKeyDown(Key::MouseRight)) {
-            float sensitivity = 0.005f;
-            orbit_yaw -= mouse.delta_x * sensitivity;
-            orbit_pitch -= mouse.delta_y * sensitivity;
-            
-            // Clamp pitch to prevent flipping
-            if (orbit_pitch > 1.5f) orbit_pitch = 1.5f;
-            if (orbit_pitch < -1.5f) orbit_pitch = -1.5f;
-        }
-        
-        // Middle-click drag: Pan camera (move pivot point)
-        if (input.IsKeyDown(Key::MouseMiddle)) {
-            float pan_speed = 0.01f * orbit_distance;  // Scale with zoom level
-            
-            // Calculate right and up vectors in world space
-            vec3 cam_forward = camera.forward;
-            vec3 cam_right = vec3{cam_forward.z, 0, -cam_forward.x}.normalized();
-            vec3 cam_up = camera.up;
-            
-            // Pan the pivot point
-            pivot_point = pivot_point - cam_right * mouse.delta_x * pan_speed;
-            pivot_point = pivot_point + cam_up * mouse.delta_y * pan_speed;
-        }
-        
-        // Scroll wheel: Zoom in/out
-        if (mouse.scroll_delta != 0) {
-            float zoom_speed = 0.15f;
-            orbit_distance *= (1.0f - mouse.scroll_delta * zoom_speed);
-            
-            // Clamp zoom distance
-            if (orbit_distance < 0.5f) orbit_distance = 0.5f;
-            if (orbit_distance > 500.0f) orbit_distance = 500.0f;
-        }
-        
-        // WASD for moving pivot (when not typing in UI)
-        if (!m_editor->WantsKeyboard()) {
-            float move_speed = 10.0f;
-            if (input.IsKeyDown(Key::Shift)) {
-                move_speed = 30.0f;
-            }
-            
-            vec3 cam_forward_flat = vec3{camera.forward.x, 0, camera.forward.z}.normalized();
-            vec3 cam_right = vec3{camera.forward.z, 0, -camera.forward.x}.normalized();
-            
-            if (input.IsKeyDown(Key::W)) pivot_point = pivot_point + cam_forward_flat * move_speed * dt;
-            if (input.IsKeyDown(Key::S)) pivot_point = pivot_point - cam_forward_flat * move_speed * dt;
-            if (input.IsKeyDown(Key::A)) pivot_point = pivot_point - cam_right * move_speed * dt;
-            if (input.IsKeyDown(Key::D)) pivot_point = pivot_point + cam_right * move_speed * dt;
-            if (input.IsKeyDown(Key::E) || input.IsKeyDown(Key::Space)) pivot_point.y += move_speed * dt;
-            if (input.IsKeyDown(Key::Q)) pivot_point.y -= move_speed * dt;
-            
-            // Focus on selected object with F key
-            if (input.IsKeyPressed(Key::F)) {
-                EditorNode* selected = m_editor->GetSelectedNode();
-                if (selected && selected->entity != INVALID_ENTITY) {
-                    pivot_point = selected->position;
-                }
-            }
-            
-            // Undo/Redo shortcuts (Ctrl+Z / Ctrl+Y)
-            if (input.IsKeyDown(Key::Control)) {
-                if (input.IsKeyPressed(Key::Z)) {
-                    m_editor->Undo();
-                }
-                if (input.IsKeyPressed(Key::Y)) {
-                    m_editor->Redo();
-                }
-            }
+    // F5 toggles play mode (works in both modes)
+    if (input.IsKeyPressed(Key::F5)) {
+        m_editor->TogglePlayMode();
+        if (m_editor->IsPlayMode()) {
+            LOG_INFO("Entered PLAY MODE - Use WASD to move, Space to jump");
+        } else {
+            LOG_INFO("Exited to EDITOR MODE");
         }
     }
     
-    // ALWAYS update camera position from orbit parameters (so gizmo always has correct view)
-    camera.forward = vec3{
-        std::cos(orbit_pitch) * std::sin(orbit_yaw),
-        std::sin(orbit_pitch),
-        std::cos(orbit_pitch) * std::cos(orbit_yaw)
-    }.normalized();
+    // Check if we're in play mode
+    bool play_mode = m_editor->IsPlayMode();
     
-    camera.position = pivot_point - camera.forward * orbit_distance;
-    
-    // Update input state for next frame
-    m_platform->GetInput().Update();
+    // ========================================
+    // PLAY MODE: Third-person camera follows player
+    // ========================================
+    if (play_mode) {
+        // Third-person camera parameters (persistent state)
+        static float cam_distance = 8.0f;         // Distance behind player
+        static float cam_height = 3.0f;           // Height above player
+        static float cam_yaw = 0.0f;              // Horizontal angle (controlled by mouse)
+        static float cam_pitch = 0.3f;            // Vertical angle (controlled by mouse)
+        static float cam_sensitivity = 0.003f;
+        static vec3 smooth_target{0, 0, 0};       // Smoothed camera target
+        
+        // Mouse look (when right-click held, or always during play)
+        if (input.IsKeyDown(Key::MouseRight)) {
+            cam_yaw -= mouse.delta_x * cam_sensitivity;
+            cam_pitch -= mouse.delta_y * cam_sensitivity;
+            
+            // Clamp pitch to prevent flipping
+            if (cam_pitch > 1.2f) cam_pitch = 1.2f;
+            if (cam_pitch < -0.3f) cam_pitch = -0.3f;
+        }
+        
+        // Scroll to adjust camera distance
+        if (mouse.scroll_delta != 0) {
+            cam_distance -= mouse.scroll_delta * 0.5f;
+            if (cam_distance < 2.0f) cam_distance = 2.0f;
+            if (cam_distance > 20.0f) cam_distance = 20.0f;
+        }
+        
+        // Get player position
+        Entity player_entity = m_ecs->GetPlayerEntity();
+        if (player_entity != INVALID_ENTITY) {
+            auto* player_transform = m_ecs->GetComponent<TransformComponent>(player_entity);
+            if (player_transform) {
+                // Target is slightly above player (shoulder level)
+                vec3 target = player_transform->position + vec3{0, 1.5f, 0};
+                
+                // Smooth camera target movement
+                float smooth_factor = 10.0f * dt;
+                if (smooth_factor > 1.0f) smooth_factor = 1.0f;
+                smooth_target = smooth_target + (target - smooth_target) * smooth_factor;
+                
+                // Calculate camera offset from target based on yaw/pitch
+                vec3 offset{
+                    std::cos(cam_pitch) * std::sin(cam_yaw) * cam_distance,
+                    std::sin(cam_pitch) * cam_distance + cam_height,
+                    std::cos(cam_pitch) * std::cos(cam_yaw) * cam_distance
+                };
+                
+                camera.position = smooth_target + offset;
+                camera.forward = (smooth_target - camera.position).normalized();
+                
+                // Update PlayerController's camera_yaw for movement direction
+                auto* script_comp = m_ecs->GetComponent<ScriptComponent>(player_entity);
+                if (script_comp) {
+                    for (auto& script : script_comp->scripts) {
+                        // Try to find PlayerController and update its camera_yaw
+                        if (script->GetTypeName() == "PlayerController") {
+                            // Use reflection or direct access - for now use a simple cast
+                            // We pass yaw in degrees for the script
+                            auto* player_ctrl = static_cast<PlayerController*>(script.get());
+                            player_ctrl->camera_yaw = cam_yaw * RAD_TO_DEG;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Escape to exit play mode
+        if (input.IsKeyPressed(Key::Escape)) {
+            m_editor->SetPlayMode(false);
+        }
+    }
+    // ========================================
+    // EDITOR MODE: Blender/Godot style camera
+    // ========================================
+    else {
+        // Camera orbit parameters (persistent state)
+        static vec3 pivot_point{0, 0, 0};
+        static float orbit_distance = 10.0f;
+        static float orbit_yaw = 0.0f;
+        static float orbit_pitch = 0.3f;
+        
+        // Check if gizmo is being manipulated
+        bool gizmo_active = m_editor->IsGizmoManipulating();
+        
+        if (!gizmo_active) {
+            // Escape to exit
+            if (input.IsKeyPressed(Key::Escape)) {
+                RequestExit();
+            }
+            
+            // Right-click drag: Orbit camera around pivot
+            if (input.IsKeyDown(Key::MouseRight)) {
+                float sensitivity = 0.005f;
+                orbit_yaw -= mouse.delta_x * sensitivity;
+                orbit_pitch -= mouse.delta_y * sensitivity;
+                
+                // Clamp pitch to prevent flipping
+                if (orbit_pitch > 1.5f) orbit_pitch = 1.5f;
+                if (orbit_pitch < -1.5f) orbit_pitch = -1.5f;
+            }
+            
+            // Middle-click drag: Pan camera (move pivot point)
+            if (input.IsKeyDown(Key::MouseMiddle)) {
+                float pan_speed = 0.01f * orbit_distance;
+                
+                vec3 cam_forward = camera.forward;
+                vec3 cam_right = vec3{cam_forward.z, 0, -cam_forward.x}.normalized();
+                vec3 cam_up = camera.up;
+                
+                pivot_point = pivot_point - cam_right * mouse.delta_x * pan_speed;
+                pivot_point = pivot_point + cam_up * mouse.delta_y * pan_speed;
+            }
+            
+            // Scroll wheel: Zoom in/out
+            if (mouse.scroll_delta != 0) {
+                float zoom_speed = 0.15f;
+                orbit_distance *= (1.0f - mouse.scroll_delta * zoom_speed);
+                
+                if (orbit_distance < 0.5f) orbit_distance = 0.5f;
+                if (orbit_distance > 500.0f) orbit_distance = 500.0f;
+            }
+            
+            // WASD for moving pivot (when not typing in UI)
+            if (!m_editor->WantsKeyboard()) {
+                float move_speed = 10.0f;
+                if (input.IsKeyDown(Key::Shift)) {
+                    move_speed = 30.0f;
+                }
+                
+                vec3 cam_forward_flat = vec3{camera.forward.x, 0, camera.forward.z}.normalized();
+                vec3 cam_right = vec3{camera.forward.z, 0, -camera.forward.x}.normalized();
+                
+                if (input.IsKeyDown(Key::W)) pivot_point = pivot_point + cam_forward_flat * move_speed * dt;
+                if (input.IsKeyDown(Key::S)) pivot_point = pivot_point - cam_forward_flat * move_speed * dt;
+                if (input.IsKeyDown(Key::A)) pivot_point = pivot_point - cam_right * move_speed * dt;
+                if (input.IsKeyDown(Key::D)) pivot_point = pivot_point + cam_right * move_speed * dt;
+                if (input.IsKeyDown(Key::E) || input.IsKeyDown(Key::Space)) pivot_point.y += move_speed * dt;
+                if (input.IsKeyDown(Key::Q)) pivot_point.y -= move_speed * dt;
+                
+                // Focus on selected object with F key
+                if (input.IsKeyPressed(Key::F)) {
+                    EditorNode* selected = m_editor->GetSelectedNode();
+                    if (selected && selected->entity != INVALID_ENTITY) {
+                        pivot_point = selected->position;
+                    }
+                }
+                
+                // Undo/Redo shortcuts (Ctrl+Z / Ctrl+Y)
+                if (input.IsKeyDown(Key::Control)) {
+                    if (input.IsKeyPressed(Key::Z)) {
+                        m_editor->Undo();
+                    }
+                    if (input.IsKeyPressed(Key::Y)) {
+                        m_editor->Redo();
+                    }
+                }
+            }
+        }
+        
+        // Update camera position from orbit parameters
+        camera.forward = vec3{
+            std::cos(orbit_pitch) * std::sin(orbit_yaw),
+            std::sin(orbit_pitch),
+            std::cos(orbit_pitch) * std::cos(orbit_yaw)
+        }.normalized();
+        
+        camera.position = pivot_point - camera.forward * orbit_distance;
+    }
     
     // Update editor UI
     m_editor->Update(dt);
@@ -370,6 +446,9 @@ void Engine::Update(float dt) {
         PROFILE_SCOPE("Jobs::Execute");
         m_jobs->ExecuteMainThreadJobs();
     }
+    
+    // Update input state for next frame (must be at end so scripts can see IsKeyPressed)
+    m_platform->GetInput().Update();
 }
 
 void Engine::Render() {

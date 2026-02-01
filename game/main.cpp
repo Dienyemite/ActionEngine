@@ -1,11 +1,19 @@
 #include "engine/engine.h"
 #include "core/logging.h"
 #include "core/math/math.h"
+#include "gameplay/ecs/ecs.h"
+#include "physics/collision_shapes.h"
+#include "physics/character_controller.h"
+#include "scripting/builtin_scripts.h"
+#include "editor/editor.h"
 
 int main() {
     using namespace action;
     
     LOG_INFO("ActionEngine Starting...");
+    
+    // Register all builtin scripts (PlayerController, etc.)
+    RegisterBuiltinScripts();
     
     // Configure engine for GTX 660 + i5-6600K target
     EngineConfig config;
@@ -77,11 +85,167 @@ int main() {
     
     renderer.SetLighting(lighting);
     
-    LOG_INFO("Engine initialized - empty scene");
-    LOG_INFO("Use Node menu or right-click in Scene panel to add objects");
-    LOG_INFO("Camera: Right-click drag to orbit, Middle-click to pan, Scroll to zoom, F to focus");
+    // ========================================
+    // Test Scene: Physics + Scripting Integration
+    // ========================================
+    ECS& ecs = engine.GetECS();
+    ScriptSystem& scripts = engine.GetScripts();
+    PhysicsWorld& physics = engine.GetPhysics();
+    AssetManager& assets = engine.GetAssets();
     
-    // Run engine (editor mode - empty scene)
+    // Create primitive meshes for test entities
+    MeshHandle cube_mesh = assets.CreateCubeMesh(1.0f);
+    MeshHandle ground_mesh = assets.CreateCubeMesh(1.0f); // Will be scaled
+    MaterialHandle default_material{0}; // Use default material
+    
+    // --- Create Player Cube ---
+    Entity player = ecs.CreateEntity();
+    ecs.SetPlayerEntity(player);
+    
+    // Transform (start above ground to test falling/landing)
+    auto& player_transform = ecs.AddComponent<TransformComponent>(player);
+    player_transform.position = {0, 3, 0};
+    player_transform.scale = {1, 1, 1};
+    
+    // Tag as player
+    auto& player_tag = ecs.AddComponent<TagComponent>(player);
+    player_tag.name = "Player";
+    player_tag.tags = Tags::Player | Tags::Dynamic;
+    
+    // Render component (visible cube)
+    auto& player_render = ecs.AddComponent<RenderComponent>(player);
+    player_render.mesh = cube_mesh;
+    player_render.material = default_material;
+    player_render.visible = true;
+    
+    // Collider for physics queries
+    auto& player_collider = ecs.AddComponent<ColliderComponent>(player);
+    player_collider.type = ColliderType::Capsule;
+    player_collider.radius = 0.4f;
+    player_collider.height = 1.8f;
+    player_collider.layer = CollisionLayer::Player;
+    player_collider.mask = CollisionLayer::Environment | CollisionLayer::Enemy;
+    
+    // Character controller for kinematic movement
+    auto& player_cc = ecs.AddComponent<CharacterControllerComponent>(player);
+    player_cc.config.height = 1.8f;
+    player_cc.config.radius = 0.4f;
+    player_cc.config.step_height = 0.35f;
+    player_cc.config.slope_limit = 50.0f;
+    player_cc.coyote_time = 0.12f;
+    player_cc.jump_buffer_duration = 0.15f;
+    
+    // Add PlayerController script
+    auto* player_script = scripts.AddScript<PlayerController>(player);
+    player_script->move_speed = 8.0f;
+    player_script->sprint_multiplier = 1.6f;
+    player_script->jump_force = 10.0f;
+    
+    LOG_INFO("Created player entity with PlayerController script");
+    
+    // --- Create Ground Plane (large box collider) ---
+    Entity ground = ecs.CreateEntity();
+    
+    auto& ground_transform = ecs.AddComponent<TransformComponent>(ground);
+    ground_transform.position = {0, -0.5f, 0};  // Top surface at y=0
+    ground_transform.scale = {100, 1, 100};     // 100x100 ground
+    
+    auto& ground_tag = ecs.AddComponent<TagComponent>(ground);
+    ground_tag.name = "Ground";
+    ground_tag.tags = Tags::Static;
+    
+    // Render component (visible ground plane)
+    auto& ground_render = ecs.AddComponent<RenderComponent>(ground);
+    ground_render.mesh = ground_mesh;
+    ground_render.material = default_material;
+    ground_render.visible = true;
+    
+    auto& ground_collider = ecs.AddComponent<ColliderComponent>(ground);
+    ground_collider.type = ColliderType::Box;
+    ground_collider.half_extents = {50, 0.5f, 50};
+    ground_collider.layer = CollisionLayer::Environment;
+    ground_collider.mask = CollisionLayer::Player | CollisionLayer::Enemy | CollisionLayer::Projectile;
+    ground_collider.is_static = true;
+    
+    // Register ground with physics world
+    physics.AddCollider(ground);
+    
+    LOG_INFO("Created ground plane");
+    
+    // --- Create some obstacle boxes for testing ---
+    for (int i = 0; i < 5; ++i) {
+        Entity box = ecs.CreateEntity();
+        
+        auto& box_transform = ecs.AddComponent<TransformComponent>(box);
+        box_transform.position = {static_cast<float>(i * 4 - 8), 0.5f, 8};
+        box_transform.scale = {1, 1, 1};
+        
+        auto& box_tag = ecs.AddComponent<TagComponent>(box);
+        box_tag.name = "Obstacle_" + std::to_string(i);
+        box_tag.tags = Tags::Static | Tags::Prop;
+        
+        // Render component
+        auto& box_render = ecs.AddComponent<RenderComponent>(box);
+        box_render.mesh = cube_mesh;
+        box_render.material = default_material;
+        box_render.visible = true;
+        
+        auto& box_collider = ecs.AddComponent<ColliderComponent>(box);
+        box_collider.type = ColliderType::Box;
+        box_collider.half_extents = {0.5f, 0.5f, 0.5f};
+        box_collider.layer = CollisionLayer::Environment;
+        box_collider.is_static = true;
+        
+        physics.AddCollider(box);
+    }
+    
+    LOG_INFO("Created 5 obstacle boxes");
+    
+    // --- Create a step/platform for testing step-up ---
+    Entity step = ecs.CreateEntity();
+    
+    auto& step_transform = ecs.AddComponent<TransformComponent>(step);
+    step_transform.position = {5, 0.15f, 0};  // Low step
+    step_transform.scale = {2, 0.3f, 2};
+    
+    auto& step_tag = ecs.AddComponent<TagComponent>(step);
+    step_tag.name = "Step";
+    step_tag.tags = Tags::Static;
+    
+    // Render component
+    auto& step_render = ecs.AddComponent<RenderComponent>(step);
+    step_render.mesh = cube_mesh;
+    step_render.material = default_material;
+    step_render.visible = true;
+    
+    auto& step_collider = ecs.AddComponent<ColliderComponent>(step);
+    step_collider.type = ColliderType::Box;
+    step_collider.half_extents = {1, 0.15f, 1};
+    step_collider.layer = CollisionLayer::Environment;
+    step_collider.is_static = true;
+    
+physics.AddCollider(step);
+    
+    LOG_INFO("Created step platform for step-up testing");
+    
+    // Position camera to follow player
+    camera.position = {0, 8, -12};
+    camera.forward = normalize(vec3{0, -0.4f, 1});
+    
+    LOG_INFO("==============================================");
+    LOG_INFO("PHYSICS + SCRIPTING TEST SCENE LOADED");
+    LOG_INFO("Controls:");
+    LOG_INFO("  WASD    - Move");
+    LOG_INFO("  Shift   - Sprint");
+    LOG_INFO("  Space   - Jump");
+    LOG_INFO("  Escape  - Exit play mode");
+    LOG_INFO("  F5      - Toggle play mode");
+    LOG_INFO("==============================================");
+
+    // Start in play mode for testing
+    engine.GetEditor().SetPlayMode(true);
+    
+    // Run engine
     engine.Run();
     
     // Cleanup
