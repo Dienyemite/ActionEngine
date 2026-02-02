@@ -248,6 +248,15 @@ void WorldManager::RemoveObject(Entity entity) {
     m_entity_to_chunk.erase(it);
 }
 
+void WorldManager::Clear() {
+    // Clear all chunks and objects
+    m_chunks.clear();
+    m_entity_to_chunk.clear();
+    m_load_queue.clear();
+    m_unload_queue.clear();
+    m_memory_usage = 0;
+}
+
 void WorldManager::UpdateObject(Entity entity, const vec3& position, const vec4& color) {
     // O(1) lookup using entity index
     auto it = m_entity_to_chunk.find(entity);

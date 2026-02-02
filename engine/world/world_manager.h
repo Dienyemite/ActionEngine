@@ -115,6 +115,9 @@ public:
     void RemoveObject(Entity entity);
     void UpdateObject(Entity entity, const vec3& position, const vec4& color);
     
+    // Clear all objects from all chunks
+    void Clear();
+    
     // Query
     std::vector<Entity> QuerySphere(const vec3& center, float radius);
     std::vector<Entity> QueryAABB(const AABB& bounds);
