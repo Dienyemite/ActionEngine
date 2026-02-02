@@ -1,0 +1,28 @@
+{
+  "__type": "ActionEngineProject",
+  "version": 1,
+  "name": "NewProject",
+  "settings": {
+    "__type": "ProjectSettings",
+    "bloom_enabled": true,
+    "window_width": 1920,
+    "shadow_cascades": 2,
+    "window_height": 1080,
+    "shadow_resolution": 1024,
+    "fullscreen": false,
+    "vsync": true,
+    "draw_distance": 400,
+    "gravity": {
+      "x": 0,
+      "y": -25,
+      "z": 0
+    },
+    "physics_substeps": 1
+  },
+  "scenes": [
+    {
+      "name": "main"
+    }
+  ],
+  "active_scene": "main"
+}
