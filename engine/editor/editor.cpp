@@ -1120,32 +1120,28 @@ void Editor::TryPickAtScreenPosition(float screen_x, float screen_y) {
     if (m_play_mode) return;
     if (IsGizmoManipulating()) return;
     
-    // Check if Alt or Ctrl is held (orbit/pan modifiers - don't pick)
     ImGuiIO& io = ImGui::GetIO();
     if (io.KeyAlt || io.KeyCtrl) return;
     
-    // Check if the click position is within the Viewports panel area
-    vec2 panel_pos = m_multi_viewport_panel->GetPanelPosition();
-    vec2 panel_size = m_multi_viewport_panel->GetPanelSize();
-    
-    if (screen_x < panel_pos.x || screen_x > panel_pos.x + panel_size.x ||
-        screen_y < panel_pos.y || screen_y > panel_pos.y + panel_size.y) {
-        return;  // Click is outside the viewport panel
-    }
+    // Don't pick if mouse is over an ImGui widget (button, slider, tree node, etc.)
+    // This allows picking on the 3D scene background while preventing
+    // interference with UI panel interactions
+    if (ImGui::IsAnyItemHovered() || ImGui::IsAnyItemActive()) return;
     
     // Convert screen coordinates to NDC using full window dimensions
+    // Vulkan conventions: Y-flip in projection, depth range [0,1]
     float window_w = (float)m_platform->GetWidth();
     float window_h = (float)m_platform->GetHeight();
     
     float ndc_x = (2.0f * screen_x / window_w) - 1.0f;
-    float ndc_y = 1.0f - (2.0f * screen_y / window_h);
+    float ndc_y = (2.0f * screen_y / window_h) - 1.0f;  // Vulkan: top=-1, bottom=+1
     
     // Build ray from renderer's camera
     const Camera& cam = m_renderer->GetCamera();
     mat4 inv_vp = cam.GetViewProjectionMatrix().inverse();
     
-    vec4 ray_near = inv_vp * vec4(ndc_x, ndc_y, -1.0f, 1.0f);
-    vec4 ray_far  = inv_vp * vec4(ndc_x, ndc_y,  1.0f, 1.0f);
+    vec4 ray_near = inv_vp * vec4(ndc_x, ndc_y, 0.0f, 1.0f);  // Vulkan near plane z=0
+    vec4 ray_far  = inv_vp * vec4(ndc_x, ndc_y, 1.0f, 1.0f);  // Vulkan far plane z=1
     
     if (std::abs(ray_near.w) > 0.0001f)
         ray_near = ray_near * (1.0f / ray_near.w);
