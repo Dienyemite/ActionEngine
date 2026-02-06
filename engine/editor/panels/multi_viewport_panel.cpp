@@ -466,13 +466,7 @@ void MultiViewportPanel::DrawViewport(SingleViewport& viewport, Renderer& render
     }
     
     // Detect left-click for object picking (actual window coordinates)
-    if (viewport.hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        ImGuiIO& io = ImGui::GetIO();
-        if (!io.KeyAlt && !io.KeyCtrl) {
-            m_left_clicked_this_frame = true;
-            m_click_screen_pos = {io.MousePos.x, io.MousePos.y};
-        }
-    }
+    // Note: Picking is now handled by Engine::Update via TryPickAtScreenPosition
     
     // Camera control for perspective viewports
     if (viewport.hovered && viewport.mode == ViewportMode::Perspective) {

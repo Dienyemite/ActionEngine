@@ -240,40 +240,7 @@ void Editor::Update(float dt) {
         }
     }
     
-    // Handle viewport picking via left-click on the Viewports panel
-    // Uses the renderer's actual camera and full window coordinates
-    if (!m_play_mode && m_multi_viewport_panel->WasLeftClicked()) {
-        bool gizmo_active = m_gizmo_panel && IsGizmoManipulating();
-        
-        if (!gizmo_active) {
-            // Get click position in window coordinates (from viewport panel)
-            vec2 click_pos = m_multi_viewport_panel->GetClickScreenPos();
-            float window_w = (float)m_platform->GetWidth();
-            float window_h = (float)m_platform->GetHeight();
-            
-            // Convert to NDC
-            float ndc_x = (2.0f * click_pos.x / window_w) - 1.0f;
-            float ndc_y = 1.0f - (2.0f * click_pos.y / window_h);
-            
-            // Build ray from renderer's actual camera
-            const Camera& cam = m_renderer->GetCamera();
-            mat4 inv_vp = cam.GetViewProjectionMatrix().inverse();
-            
-            vec4 ray_near = inv_vp * vec4(ndc_x, ndc_y, -1.0f, 1.0f);
-            vec4 ray_far  = inv_vp * vec4(ndc_x, ndc_y,  1.0f, 1.0f);
-            
-            if (std::abs(ray_near.w) > 0.0001f)
-                ray_near = ray_near * (1.0f / ray_near.w);
-            if (std::abs(ray_far.w) > 0.0001f)
-                ray_far = ray_far * (1.0f / ray_far.w);
-            
-            vec3 origin(ray_near.x, ray_near.y, ray_near.z);
-            vec3 dir = vec3(ray_far.x - ray_near.x, ray_far.y - ray_near.y, ray_far.z - ray_near.z).normalized();
-            
-            Ray pick_ray(origin, dir);
-            HandleViewportPick(pick_ray);
-        }
-    }
+    // Viewport picking is now handled by Engine::Update via TryPickAtScreenPosition
     
     // Sync transform changes from editor to ECS/WorldManager
     SyncTransforms();
@@ -1149,6 +1116,49 @@ EditorNode* Editor::FindNodeByEntity(Entity entity, EditorNode& root) {
     return nullptr;
 }
 
+void Editor::TryPickAtScreenPosition(float screen_x, float screen_y) {
+    if (m_play_mode) return;
+    if (IsGizmoManipulating()) return;
+    
+    // Check if Alt or Ctrl is held (orbit/pan modifiers - don't pick)
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.KeyAlt || io.KeyCtrl) return;
+    
+    // Check if the click position is within the Viewports panel area
+    vec2 panel_pos = m_multi_viewport_panel->GetPanelPosition();
+    vec2 panel_size = m_multi_viewport_panel->GetPanelSize();
+    
+    if (screen_x < panel_pos.x || screen_x > panel_pos.x + panel_size.x ||
+        screen_y < panel_pos.y || screen_y > panel_pos.y + panel_size.y) {
+        return;  // Click is outside the viewport panel
+    }
+    
+    // Convert screen coordinates to NDC using full window dimensions
+    float window_w = (float)m_platform->GetWidth();
+    float window_h = (float)m_platform->GetHeight();
+    
+    float ndc_x = (2.0f * screen_x / window_w) - 1.0f;
+    float ndc_y = 1.0f - (2.0f * screen_y / window_h);
+    
+    // Build ray from renderer's camera
+    const Camera& cam = m_renderer->GetCamera();
+    mat4 inv_vp = cam.GetViewProjectionMatrix().inverse();
+    
+    vec4 ray_near = inv_vp * vec4(ndc_x, ndc_y, -1.0f, 1.0f);
+    vec4 ray_far  = inv_vp * vec4(ndc_x, ndc_y,  1.0f, 1.0f);
+    
+    if (std::abs(ray_near.w) > 0.0001f)
+        ray_near = ray_near * (1.0f / ray_near.w);
+    if (std::abs(ray_far.w) > 0.0001f)
+        ray_far = ray_far * (1.0f / ray_far.w);
+    
+    vec3 origin(ray_near.x, ray_near.y, ray_near.z);
+    vec3 dir = vec3(ray_far.x - ray_near.x, ray_far.y - ray_near.y, ray_far.z - ray_near.z).normalized();
+    
+    Ray pick_ray(origin, dir);
+    HandleViewportPick(pick_ray);
+}
+
 void Editor::HandleViewportPick(const Ray& ray) {
     if (m_play_mode) return;  // Don't pick in play mode
     
@@ -1160,7 +1170,6 @@ void Editor::HandleViewportPick(const Ray& ray) {
         EditorNode* node = FindNodeByEntity(picked_entity);
         if (node) {
             SetSelectedNode(node->id);
-            LOG_DEBUG("Picked object: {} (entity {})", node->name, picked_entity);
         }
     } else {
         // Clicked on empty space - deselect
