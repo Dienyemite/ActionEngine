@@ -44,11 +44,6 @@ bool Editor::Initialize(Renderer& renderer, Platform& platform, ECS& ecs,
     m_shader_graph_editor->Initialize();
     m_shader_graph_editor->visible = false;  // Start hidden
     
-    // Set up viewport picking callback
-    m_multi_viewport_panel->on_pick_request = [this](const Ray& ray) {
-        HandleViewportPick(ray);
-    };
-    
     // Set up Inspector delete callback
     m_inspector_panel->SetDeleteCallback([this](u32 node_id) {
         if (node_id != 0 && node_id != m_scene_root.id) {
@@ -242,6 +237,46 @@ void Editor::Update(float dt) {
                     old_scale, selected->scale);
                 m_command_history.AddWithoutExecute(std::move(cmd));
             }
+        }
+    }
+    
+    // Handle viewport picking via left-click
+    // Uses the renderer's actual camera and full window coordinates
+    if (!m_play_mode) {
+        ImGuiIO& io = ImGui::GetIO();
+        bool gizmo_active = m_gizmo_panel && IsGizmoManipulating();
+        
+        // Left-click when not over any ImGui window and not manipulating gizmo
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && 
+            !io.WantCaptureMouse && !gizmo_active) {
+            
+            // Get mouse position in window coordinates
+            float mouse_x = io.MousePos.x;
+            float mouse_y = io.MousePos.y;
+            float window_w = (float)m_platform->GetWidth();
+            float window_h = (float)m_platform->GetHeight();
+            
+            // Convert to NDC
+            float ndc_x = (2.0f * mouse_x / window_w) - 1.0f;
+            float ndc_y = 1.0f - (2.0f * mouse_y / window_h);
+            
+            // Build ray from renderer's actual camera
+            const Camera& cam = m_renderer->GetCamera();
+            mat4 inv_vp = cam.GetViewProjectionMatrix().inverse();
+            
+            vec4 ray_near = inv_vp * vec4(ndc_x, ndc_y, -1.0f, 1.0f);
+            vec4 ray_far  = inv_vp * vec4(ndc_x, ndc_y,  1.0f, 1.0f);
+            
+            if (std::abs(ray_near.w) > 0.0001f)
+                ray_near = ray_near * (1.0f / ray_near.w);
+            if (std::abs(ray_far.w) > 0.0001f)
+                ray_far = ray_far * (1.0f / ray_far.w);
+            
+            vec3 origin(ray_near.x, ray_near.y, ray_near.z);
+            vec3 dir = vec3(ray_far.x - ray_near.x, ray_far.y - ray_near.y, ray_far.z - ray_near.z).normalized();
+            
+            Ray pick_ray(origin, dir);
+            HandleViewportPick(pick_ray);
         }
     }
     
