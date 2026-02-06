@@ -224,7 +224,10 @@ inline bool Ray::intersects(const AABB& aabb, float& t_min) const {
         }
     }
     
-    t_min = t_near > 0 ? t_near : t_far;
+    // If t_near < 0, the ray origin is inside the AABB.
+    // Return 0 distance (we're already overlapping) so close objects
+    // aren't penalized by using the far exit distance.
+    t_min = t_near > 0 ? t_near : 0.0f;
     return true;
 }
 

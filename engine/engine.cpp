@@ -396,10 +396,6 @@ void Engine::Update(float dt) {
                 }
             }
             
-            // Left-click: Pick objects in viewport
-            if (input.IsKeyPressed(Key::MouseLeft)) {
-                m_editor->TryPickAtScreenPosition((float)mouse.x, (float)mouse.y);
-            }
         }
         
         // Update camera position from orbit parameters
@@ -414,6 +410,11 @@ void Engine::Update(float dt) {
     
     // Update editor UI
     m_editor->Update(dt);
+    
+    // Viewport picking: must run AFTER m_editor->Update so ImGui hover state is current
+    if (!play_mode && input.IsKeyPressed(Key::MouseLeft)) {
+        m_editor->TryPickAtScreenPosition((float)mouse.x, (float)mouse.y);
+    }
     
     // Get player position for streaming
     vec3 player_pos = m_ecs->GetPlayerPosition();
