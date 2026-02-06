@@ -192,4 +192,40 @@ inline bool Sphere::intersects(const Sphere& other) const {
     return distance_sq(center, other.center) <= r * r;
 }
 
+// Ray-AABB intersection using slab method
+inline bool Ray::intersects(const AABB& aabb, float& t_min) const {
+    float t_near = -FLT_MAX;
+    float t_far = FLT_MAX;
+    
+    for (int i = 0; i < 3; ++i) {
+        float origin_i = (&origin.x)[i];
+        float dir_i = (&direction.x)[i];
+        float min_i = (&aabb.min.x)[i];
+        float max_i = (&aabb.max.x)[i];
+        
+        if (std::abs(dir_i) < EPSILON) {
+            // Ray is parallel to slab, check if origin is inside
+            if (origin_i < min_i || origin_i > max_i) {
+                return false;
+            }
+        } else {
+            float inv_d = 1.0f / dir_i;
+            float t1 = (min_i - origin_i) * inv_d;
+            float t2 = (max_i - origin_i) * inv_d;
+            
+            if (t1 > t2) std::swap(t1, t2);
+            
+            t_near = std::max(t_near, t1);
+            t_far = std::min(t_far, t2);
+            
+            if (t_near > t_far || t_far < 0) {
+                return false;
+            }
+        }
+    }
+    
+    t_min = t_near > 0 ? t_near : t_far;
+    return true;
+}
+
 } // namespace action

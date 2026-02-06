@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <functional>
 
 namespace action {
 
@@ -84,6 +85,7 @@ struct SingleViewport {
  * - Different view modes per viewport
  * - Independent camera controls
  * - Active viewport selection
+ * - Object picking via left-click
  */
 class MultiViewportPanel {
 public:
@@ -105,6 +107,13 @@ public:
     
     // Set active viewport
     void SetActiveViewport(u32 id);
+    
+    // Get ray from screen position (relative to viewport)
+    Ray GetRayFromScreenPoint(const SingleViewport& viewport, const vec2& screen_pos) const;
+    
+    // Callback for when user clicks to pick an object
+    // Set this to receive pick events (passes the ray for picking)
+    std::function<void(const Ray&)> on_pick_request;
     
     // Panel visibility
     bool visible = true;

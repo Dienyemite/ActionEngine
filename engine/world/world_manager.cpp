@@ -257,6 +257,62 @@ void WorldManager::Clear() {
     m_memory_usage = 0;
 }
 
+Entity WorldManager::PickObject(const Ray& ray, float max_distance) {
+    Entity closest_entity = INVALID_ENTITY;
+    float closest_t = max_distance;
+    
+    // Check all objects in all loaded chunks
+    for (auto& [coord, chunk] : m_chunks) {
+        if (chunk.state != ChunkState::Loaded && chunk.state != ChunkState::Active) {
+            continue;
+        }
+        
+        // Quick chunk bounds check
+        float chunk_t;
+        if (!ray.intersects(chunk.bounds, chunk_t) || chunk_t > closest_t) {
+            continue;
+        }
+        
+        // Check individual objects
+        for (const auto& obj : chunk.objects) {
+            if (!obj.visible) continue;
+            
+            float t;
+            if (ray.intersects(obj.bounds, t) && t < closest_t && t >= 0) {
+                closest_t = t;
+                closest_entity = obj.entity;
+            }
+        }
+    }
+    
+    // Also check ECS entities with TransformComponent and BoundsComponent
+    if (m_ecs) {
+        m_ecs->ForEach<TransformComponent, RenderComponent>(
+            [&](Entity entity, TransformComponent& transform, RenderComponent& render) {
+                if (!render.visible || !render.mesh.is_valid()) {
+                    return;
+                }
+                
+                AABB bounds;
+                if (m_ecs->HasComponent<BoundsComponent>(entity)) {
+                    bounds = m_ecs->GetComponent<BoundsComponent>(entity)->world_bounds;
+                } else {
+                    // Default bounds if no bounds component
+                    bounds.min = transform.position - vec3{0.5f, 0.5f, 0.5f};
+                    bounds.max = transform.position + vec3{0.5f, 0.5f, 0.5f};
+                }
+                
+                float t;
+                if (ray.intersects(bounds, t) && t < closest_t && t >= 0) {
+                    closest_t = t;
+                    closest_entity = entity;
+                }
+            });
+    }
+    
+    return closest_entity;
+}
+
 void WorldManager::UpdateObject(Entity entity, const vec3& position, const vec4& color) {
     // O(1) lookup using entity index
     auto it = m_entity_to_chunk.find(entity);

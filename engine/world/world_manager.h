@@ -118,6 +118,10 @@ public:
     // Clear all objects from all chunks
     void Clear();
     
+    // Raycast picking - returns entity hit by ray, or INVALID_ENTITY if none
+    // Returns closest hit along the ray
+    Entity PickObject(const Ray& ray, float max_distance = 1000.0f);
+    
     // Query
     std::vector<Entity> QuerySphere(const vec3& center, float radius);
     std::vector<Entity> QueryAABB(const AABB& bounds);
