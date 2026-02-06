@@ -4,7 +4,6 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include <functional>
 
 namespace action {
 
@@ -108,12 +107,14 @@ public:
     // Set active viewport
     void SetActiveViewport(u32 id);
     
-    // Get ray from screen position (relative to viewport)
-    Ray GetRayFromScreenPoint(const SingleViewport& viewport, const vec2& screen_pos) const;
+    // Check if any viewport was left-clicked this frame (for object picking)
+    bool WasLeftClicked() const { return m_left_clicked_this_frame; }
     
-    // Callback for when user clicks to pick an object
-    // Set this to receive pick events (passes the ray for picking)
-    std::function<void(const Ray&)> on_pick_request;
+    // Get the screen position where the click happened (window coordinates)
+    vec2 GetClickScreenPos() const { return m_click_screen_pos; }
+    
+    // Check if mouse is over any viewport
+    bool IsHovered() const { return m_any_viewport_hovered; }
     
     // Panel visibility
     bool visible = true;
@@ -142,6 +143,11 @@ private:
     vec2 m_last_mouse_pos{0, 0};
     bool m_is_orbiting = false;
     bool m_is_panning = false;
+    
+    // Click detection for object picking
+    bool m_left_clicked_this_frame = false;
+    bool m_any_viewport_hovered = false;
+    vec2 m_click_screen_pos{0, 0};
 };
 
 } // namespace action
