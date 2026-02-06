@@ -197,6 +197,20 @@ struct Sphere {
     bool intersects(const Sphere& other) const;
 };
 
+// Ray for raycasting/picking
+struct Ray {
+    vec3 origin;
+    vec3 direction;  // Should be normalized
+    
+    Ray() : origin(), direction(0, 0, -1) {}
+    Ray(const vec3& o, const vec3& d) : origin(o), direction(d.normalized()) {}
+    
+    vec3 at(float t) const { return origin + direction * t; }
+    
+    // Returns true if ray intersects AABB, t_min is distance to intersection
+    bool intersects(const AABB& aabb, float& t_min) const;
+};
+
 // Standard vertex format for 3D meshes
 // Disable padding warning - alignment is intentional for GPU buffer layout
 #ifdef _MSC_VER

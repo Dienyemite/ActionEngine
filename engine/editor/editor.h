@@ -165,6 +165,11 @@ private:
     void PromptSaveBeforeAction(std::function<void()> on_proceed);
     void ClearCurrentScene();
     
+    // Viewport picking
+    void HandleViewportPick(const Ray& ray);
+    EditorNode* FindNodeByEntity(Entity entity);
+    EditorNode* FindNodeByEntity(Entity entity, EditorNode& root);
+    
     // Create mesh handles for primitives (cached)
     void CreatePrimitiveMeshes();
     

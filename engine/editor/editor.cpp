@@ -44,6 +44,11 @@ bool Editor::Initialize(Renderer& renderer, Platform& platform, ECS& ecs,
     m_shader_graph_editor->Initialize();
     m_shader_graph_editor->visible = false;  // Start hidden
     
+    // Set up viewport picking callback
+    m_multi_viewport_panel->on_pick_request = [this](const Ray& ray) {
+        HandleViewportPick(ray);
+    };
+    
     // Set up Inspector delete callback
     m_inspector_panel->SetDeleteCallback([this](u32 node_id) {
         if (node_id != 0 && node_id != m_scene_root.id) {
@@ -1088,6 +1093,37 @@ EditorNode* Editor::FindNode(u64 node_id, EditorNode& root) {
         if (auto* found = FindNode(node_id, child)) return found;
     }
     return nullptr;
+}
+
+EditorNode* Editor::FindNodeByEntity(Entity entity) {
+    return FindNodeByEntity(entity, m_scene_root);
+}
+
+EditorNode* Editor::FindNodeByEntity(Entity entity, EditorNode& root) {
+    if (root.entity == entity) return &root;
+    for (auto& child : root.children) {
+        if (auto* found = FindNodeByEntity(entity, child)) return found;
+    }
+    return nullptr;
+}
+
+void Editor::HandleViewportPick(const Ray& ray) {
+    if (m_play_mode) return;  // Don't pick in play mode
+    
+    // Use WorldManager to pick objects
+    Entity picked_entity = m_world->PickObject(ray, 1000.0f);
+    
+    if (picked_entity != INVALID_ENTITY) {
+        // Find the EditorNode that owns this entity
+        EditorNode* node = FindNodeByEntity(picked_entity);
+        if (node) {
+            SetSelectedNode(node->id);
+            LOG_DEBUG("Picked object: {} (entity {})", node->name, picked_entity);
+        }
+    } else {
+        // Clicked on empty space - deselect
+        ClearSelection();
+    }
 }
 
 // ============================================================================
