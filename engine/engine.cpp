@@ -395,6 +395,11 @@ void Engine::Update(float dt) {
                     }
                 }
             }
+            
+            // Left-click: Pick objects in viewport
+            if (input.IsKeyPressed(Key::MouseLeft)) {
+                m_editor->TryPickAtScreenPosition((float)mouse.x, (float)mouse.y);
+            }
         }
         
         // Update camera position from orbit parameters

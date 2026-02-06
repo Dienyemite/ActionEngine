@@ -116,6 +116,10 @@ public:
     // Check if mouse is over any viewport
     bool IsHovered() const { return m_any_viewport_hovered; }
     
+    // Panel bounds (screen coordinates, updated each frame)
+    vec2 GetPanelPosition() const { return m_panel_position; }
+    vec2 GetPanelSize() const { return m_panel_size; }
+    
     // Panel visibility
     bool visible = true;
     

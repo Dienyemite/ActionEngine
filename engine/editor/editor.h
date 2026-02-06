@@ -151,6 +151,9 @@ public:
     // Check if gizmo is being manipulated
     bool IsGizmoManipulating() const;
     
+    // Viewport picking from raw screen coordinates (called by Engine)
+    void TryPickAtScreenPosition(float screen_x, float screen_y);
+    
 private:
     void SetupDockspace();
     void SetupStyle();
