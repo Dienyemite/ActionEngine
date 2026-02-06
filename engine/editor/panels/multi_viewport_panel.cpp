@@ -281,6 +281,10 @@ void MultiViewportPanel::UpdateViewportBounds() {
 void MultiViewportPanel::Draw(Renderer& renderer, bool play_mode) {
     if (!visible) return;
     
+    // Reset per-frame state
+    m_left_clicked_this_frame = false;
+    m_any_viewport_hovered = false;
+    
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
     
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
@@ -454,8 +458,20 @@ void MultiViewportPanel::DrawViewport(SingleViewport& viewport, Renderer& render
     ImGui::InvisibleButton(("viewport_" + std::to_string(viewport.id)).c_str(), vp_size);
     
     viewport.hovered = ImGui::IsItemHovered();
+    if (viewport.hovered) {
+        m_any_viewport_hovered = true;
+    }
     if (ImGui::IsItemClicked()) {
         m_active_viewport_id = viewport.id;
+    }
+    
+    // Detect left-click for object picking (actual window coordinates)
+    if (viewport.hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        ImGuiIO& io = ImGui::GetIO();
+        if (!io.KeyAlt && !io.KeyCtrl) {
+            m_left_clicked_this_frame = true;
+            m_click_screen_pos = {io.MousePos.x, io.MousePos.y};
+        }
     }
     
     // Camera control for perspective viewports
@@ -466,30 +482,6 @@ void MultiViewportPanel::DrawViewport(SingleViewport& viewport, Renderer& render
 
 void MultiViewportPanel::HandleViewportInput(SingleViewport& viewport) {
     ImGuiIO& io = ImGui::GetIO();
-    
-    // Left-click for object picking (when not dragging)
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt && !io.KeyCtrl) {
-        // Get mouse position relative to viewport
-        ImVec2 mouse_pos = io.MousePos;
-        ImVec2 base_pos = ImGui::GetCursorScreenPos();
-        
-        // Calculate position relative to this viewport's content area
-        // The base_pos from Draw() is stored in m_panel_position, viewport position is relative
-        vec2 local_pos = {
-            mouse_pos.x - (m_panel_position.x + viewport.position.x),
-            mouse_pos.y - (m_panel_position.y + viewport.position.y + 24.0f) // Account for toolbar
-        };
-        
-        // Only pick if within viewport bounds
-        if (local_pos.x >= 0 && local_pos.x <= viewport.size.x &&
-            local_pos.y >= 0 && local_pos.y <= (viewport.size.y - 24.0f)) {
-            
-            if (on_pick_request) {
-                Ray ray = GetRayFromScreenPoint(viewport, local_pos);
-                on_pick_request(ray);
-            }
-        }
-    }
     
     // Middle mouse button for orbiting
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
@@ -549,42 +541,6 @@ void MultiViewportPanel::SetActiveViewport(u32 id) {
     if (GetViewport(id)) {
         m_active_viewport_id = id;
     }
-}
-
-Ray MultiViewportPanel::GetRayFromScreenPoint(const SingleViewport& viewport, const vec2& screen_pos) const {
-    // Convert screen position to normalized device coordinates (-1 to 1)
-    float ndc_x = (2.0f * screen_pos.x / viewport.size.x) - 1.0f;
-    float ndc_y = 1.0f - (2.0f * screen_pos.y / (viewport.size.y - 24.0f)); // Flip Y, account for toolbar
-    
-    // Get view and projection matrices
-    float aspect = viewport.size.x / (viewport.size.y - 24.0f);
-    mat4 view = viewport.GetViewMatrix();
-    mat4 proj = viewport.GetProjectionMatrix(aspect);
-    
-    // Inverse of view-projection
-    mat4 inv_view_proj = (proj * view).inverse();
-    
-    // Ray origin and direction in clip space
-    vec4 ray_clip_near(ndc_x, ndc_y, -1.0f, 1.0f);
-    vec4 ray_clip_far(ndc_x, ndc_y, 1.0f, 1.0f);
-    
-    // Transform to world space
-    vec4 ray_world_near = inv_view_proj * ray_clip_near;
-    vec4 ray_world_far = inv_view_proj * ray_clip_far;
-    
-    // Perspective divide
-    if (std::abs(ray_world_near.w) > 0.0001f) {
-        ray_world_near = ray_world_near * (1.0f / ray_world_near.w);
-    }
-    if (std::abs(ray_world_far.w) > 0.0001f) {
-        ray_world_far = ray_world_far * (1.0f / ray_world_far.w);
-    }
-    
-    vec3 ray_origin(ray_world_near.x, ray_world_near.y, ray_world_near.z);
-    vec3 ray_end(ray_world_far.x, ray_world_far.y, ray_world_far.z);
-    vec3 ray_dir = (ray_end - ray_origin).normalized();
-    
-    return Ray(ray_origin, ray_dir);
 }
 
 } // namespace action

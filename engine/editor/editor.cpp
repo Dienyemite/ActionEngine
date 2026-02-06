@@ -240,25 +240,20 @@ void Editor::Update(float dt) {
         }
     }
     
-    // Handle viewport picking via left-click
+    // Handle viewport picking via left-click on the Viewports panel
     // Uses the renderer's actual camera and full window coordinates
-    if (!m_play_mode) {
-        ImGuiIO& io = ImGui::GetIO();
+    if (!m_play_mode && m_multi_viewport_panel->WasLeftClicked()) {
         bool gizmo_active = m_gizmo_panel && IsGizmoManipulating();
         
-        // Left-click when not over any ImGui window and not manipulating gizmo
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && 
-            !io.WantCaptureMouse && !gizmo_active) {
-            
-            // Get mouse position in window coordinates
-            float mouse_x = io.MousePos.x;
-            float mouse_y = io.MousePos.y;
+        if (!gizmo_active) {
+            // Get click position in window coordinates (from viewport panel)
+            vec2 click_pos = m_multi_viewport_panel->GetClickScreenPos();
             float window_w = (float)m_platform->GetWidth();
             float window_h = (float)m_platform->GetHeight();
             
             // Convert to NDC
-            float ndc_x = (2.0f * mouse_x / window_w) - 1.0f;
-            float ndc_y = 1.0f - (2.0f * mouse_y / window_h);
+            float ndc_x = (2.0f * click_pos.x / window_w) - 1.0f;
+            float ndc_y = 1.0f - (2.0f * click_pos.y / window_h);
             
             // Build ray from renderer's actual camera
             const Camera& cam = m_renderer->GetCamera();
@@ -1098,6 +1093,18 @@ void Editor::SyncTransforms() {
                 float ry = node.rotation.y * (PI / 180.0f);
                 float rz = node.rotation.z * (PI / 180.0f);
                 transform->rotation = quat::from_euler(rx, ry, rz);
+            }
+            
+            // Update BoundsComponent world bounds for accurate picking
+            if (m_ecs->HasComponent<BoundsComponent>(node.entity)) {
+                auto* bounds = m_ecs->GetComponent<BoundsComponent>(node.entity);
+                vec3 half = bounds->local_bounds.extents();
+                // Scale the half-extents
+                vec3 scaled_half{half.x * node.scale.x, half.y * node.scale.y, half.z * node.scale.z};
+                bounds->world_bounds = AABB(
+                    node.position - scaled_half,
+                    node.position + scaled_half
+                );
             }
             
             // Update WorldManager object position and color
