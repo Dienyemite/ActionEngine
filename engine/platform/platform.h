@@ -111,6 +111,7 @@ public:
     // File dialogs
     std::string OpenFileDialog(const std::string& title, const std::string& filter, const std::string& default_path = "");
     std::string SaveFileDialog(const std::string& title, const std::string& filter, const std::string& default_path = "");
+    std::string OpenFolderDialog(const std::string& title, const std::string& default_path = "");
     
 private:
     u32 m_width = 0;

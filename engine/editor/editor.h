@@ -13,7 +13,10 @@
 #include "prefabs/prefab.h"
 #include "assets/asset_hot_reloader.h"
 #include "shader_graph/shader_graph_editor.h"
+#include "project/project.h"
+#include "project/scene_serializer.h"
 #include <memory>
+#include <functional>
 
 namespace action {
 
@@ -125,6 +128,19 @@ public:
     // Asset Hot Reload
     AssetHotReloader& GetHotReloader() { return m_hot_reloader; }
     
+    // Project management
+    bool NewProject();
+    bool OpenProject();
+    bool OpenProject(const std::string& path);
+    bool SaveScene();
+    bool SaveSceneAs();
+    bool LoadScene(const std::string& path);
+    bool HasActiveProject() const { return m_active_project != nullptr; }
+    Project* GetActiveProject() { return m_active_project.get(); }
+    const std::string& GetCurrentScenePath() const { return m_current_scene_path; }
+    void SetSceneModified(bool modified) { m_scene_modified = modified; }
+    bool IsSceneModified() const { return m_scene_modified; }
+    
     // Log message (for console panel)
     void Log(const std::string& message, int level = 0);
     
@@ -135,6 +151,9 @@ public:
     // Check if gizmo is being manipulated
     bool IsGizmoManipulating() const;
     
+    // Viewport picking from raw screen coordinates (called by Engine)
+    void TryPickAtScreenPosition(float screen_x, float screen_y);
+    
 private:
     void SetupDockspace();
     void SetupStyle();
@@ -142,6 +161,17 @@ private:
     void DrawToolbar();
     void DrawAddNodePopup();
     void DrawSavePrefabPopup();
+    void DrawNewProjectPopup();
+    void DrawUnsavedChangesPopup();
+    
+    // Helper to check for unsaved changes before action
+    void PromptSaveBeforeAction(std::function<void()> on_proceed);
+    void ClearCurrentScene();
+    
+    // Viewport picking
+    void HandleViewportPick(const Ray& ray);
+    EditorNode* FindNodeByEntity(Entity entity);
+    EditorNode* FindNodeByEntity(Entity entity, EditorNode& root);
     
     // Create mesh handles for primitives (cached)
     void CreatePrimitiveMeshes();
@@ -174,7 +204,19 @@ private:
     bool m_show_demo_window = false;
     bool m_show_add_node_popup = false;
     bool m_show_save_prefab_popup = false;
+    bool m_show_new_project_popup = false;
+    bool m_show_unsaved_changes_popup = false;
     char m_prefab_name_buffer[128] = "";
+    char m_new_project_name[128] = "MyProject";
+    char m_new_project_path[512] = "";
+    
+    // Pending action after save confirmation
+    std::function<void()> m_pending_action;
+    
+    // Project management
+    std::unique_ptr<Project> m_active_project;
+    std::string m_current_scene_path;
+    bool m_scene_modified = false;
     
     // Scene data
     EditorNode m_scene_root;

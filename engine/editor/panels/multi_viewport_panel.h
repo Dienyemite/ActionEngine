@@ -84,6 +84,7 @@ struct SingleViewport {
  * - Different view modes per viewport
  * - Independent camera controls
  * - Active viewport selection
+ * - Object picking via left-click
  */
 class MultiViewportPanel {
 public:
@@ -105,6 +106,19 @@ public:
     
     // Set active viewport
     void SetActiveViewport(u32 id);
+    
+    // Check if any viewport was left-clicked this frame (for object picking)
+    bool WasLeftClicked() const { return m_left_clicked_this_frame; }
+    
+    // Get the screen position where the click happened (window coordinates)
+    vec2 GetClickScreenPos() const { return m_click_screen_pos; }
+    
+    // Check if mouse is over any viewport
+    bool IsHovered() const { return m_any_viewport_hovered; }
+    
+    // Panel bounds (screen coordinates, updated each frame)
+    vec2 GetPanelPosition() const { return m_panel_position; }
+    vec2 GetPanelSize() const { return m_panel_size; }
     
     // Panel visibility
     bool visible = true;
@@ -133,6 +147,11 @@ private:
     vec2 m_last_mouse_pos{0, 0};
     bool m_is_orbiting = false;
     bool m_is_panning = false;
+    
+    // Click detection for object picking
+    bool m_left_clicked_this_frame = false;
+    bool m_any_viewport_hovered = false;
+    vec2 m_click_screen_pos{0, 0};
 };
 
 } // namespace action
