@@ -281,6 +281,10 @@ void MultiViewportPanel::UpdateViewportBounds() {
 void MultiViewportPanel::Draw(Renderer& renderer, bool play_mode) {
     if (!visible) return;
     
+    // Reset per-frame state
+    m_left_clicked_this_frame = false;
+    m_any_viewport_hovered = false;
+    
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
     
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
@@ -454,9 +458,15 @@ void MultiViewportPanel::DrawViewport(SingleViewport& viewport, Renderer& render
     ImGui::InvisibleButton(("viewport_" + std::to_string(viewport.id)).c_str(), vp_size);
     
     viewport.hovered = ImGui::IsItemHovered();
+    if (viewport.hovered) {
+        m_any_viewport_hovered = true;
+    }
     if (ImGui::IsItemClicked()) {
         m_active_viewport_id = viewport.id;
     }
+    
+    // Detect left-click for object picking (actual window coordinates)
+    // Note: Picking is now handled by Engine::Update via TryPickAtScreenPosition
     
     // Camera control for perspective viewports
     if (viewport.hovered && viewport.mode == ViewportMode::Perspective) {

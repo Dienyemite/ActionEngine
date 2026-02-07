@@ -8,6 +8,7 @@
 #include "commands/editor_commands.h"
 #include <imgui/imgui.h>
 #include <algorithm>
+#include <filesystem>
 
 namespace action {
 
@@ -239,6 +240,8 @@ void Editor::Update(float dt) {
         }
     }
     
+    // Viewport picking is now handled by Engine::Update via TryPickAtScreenPosition
+    
     // Sync transform changes from editor to ECS/WorldManager
     SyncTransforms();
     
@@ -247,6 +250,12 @@ void Editor::Update(float dt) {
     
     // Draw Save Prefab popup if requested
     DrawSavePrefabPopup();
+    
+    // Draw New Project popup if requested
+    DrawNewProjectPopup();
+    
+    // Draw unsaved changes confirmation popup
+    DrawUnsavedChangesPopup();
     
     // Draw shader graph editor
     m_shader_graph_editor->Draw(*m_renderer);
@@ -387,19 +396,102 @@ void Editor::SetupStyle() {
 void Editor::DrawMenuBar() {
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("New Scene", "Ctrl+N")) {
-                // Clear all children from scene root
-                for (auto& child : m_scene_root.children) {
-                    if (child.entity != INVALID_ENTITY) {
-                        m_ecs->DestroyEntity(child.entity);
+            // Project management
+            if (ImGui::MenuItem("New Project...", "Ctrl+Shift+N")) {
+                // Initialize default project path
+                #ifdef _WIN32
+                    const char* userprofile = std::getenv("USERPROFILE");
+                    if (userprofile) {
+                        snprintf(m_new_project_path, sizeof(m_new_project_path), 
+                                 "%s\\Documents\\ActionEngine Projects", userprofile);
+                    }
+                #endif
+                
+                // Check for unsaved changes
+                if (m_scene_modified && m_active_project) {
+                    PromptSaveBeforeAction([this]() {
+                        m_show_new_project_popup = true;
+                    });
+                } else {
+                    m_show_new_project_popup = true;
+                }
+            }
+            if (ImGui::MenuItem("Open Project...", "Ctrl+Shift+O")) {
+                if (m_scene_modified && m_active_project) {
+                    PromptSaveBeforeAction([this]() {
+                        OpenProject();
+                    });
+                } else {
+                    OpenProject();
+                }
+            }
+            
+            // Recent projects submenu
+            if (ImGui::BeginMenu("Recent Projects")) {
+                auto recent = Project::GetRecentProjects();
+                if (recent.empty()) {
+                    ImGui::TextDisabled("No recent projects");
+                } else {
+                    for (const auto& proj : recent) {
+                        if (ImGui::MenuItem(proj.name.c_str())) {
+                            std::string path_copy = proj.path;  // Copy for lambda capture
+                            if (m_scene_modified && m_active_project) {
+                                PromptSaveBeforeAction([this, path_copy]() {
+                                    OpenProject(path_copy);
+                                });
+                            } else {
+                                OpenProject(proj.path);
+                            }
+                        }
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("%s", proj.path.c_str());
+                        }
+                    }
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Clear Recent")) {
+                        Project::ClearRecentProjects();
                     }
                 }
-                m_scene_root.children.clear();
-                m_selected_node_id = 0;
+                ImGui::EndMenu();
             }
-            if (ImGui::MenuItem("Open Scene", "Ctrl+O")) {}
-            if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {}
-            if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S")) {}
+            
+            ImGui::Separator();
+            
+            // Scene management
+            bool has_project = HasActiveProject();
+            if (ImGui::MenuItem("New Scene", "Ctrl+N", false, has_project)) {
+                if (m_scene_modified) {
+                    PromptSaveBeforeAction([this]() {
+                        ClearCurrentScene();
+                        m_current_scene_path.clear();
+                        m_scene_modified = false;
+                        Log("Created new scene", 0);
+                    });
+                } else {
+                    ClearCurrentScene();
+                    m_current_scene_path.clear();
+                    m_scene_modified = false;
+                    Log("Created new scene", 0);
+                }
+            }
+            if (ImGui::MenuItem("Open Scene...", "Ctrl+O", false, has_project)) {
+                std::string filter = "Scene Files|*.aescene|All Files|*.*";
+                std::string scenes_dir = m_active_project ? m_active_project->GetScenesPath() : "";
+                std::string filepath = m_platform->OpenFileDialog("Open Scene", filter, scenes_dir);
+                if (!filepath.empty()) {
+                    LoadScene(filepath);
+                }
+            }
+            
+            // Show scene modified indicator
+            std::string save_label = m_scene_modified ? "Save Scene *" : "Save Scene";
+            if (ImGui::MenuItem(save_label.c_str(), "Ctrl+S", false, has_project)) {
+                SaveScene();
+            }
+            if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S", false, has_project)) {
+                SaveSceneAs();
+            }
+            
             ImGui::Separator();
             if (ImGui::MenuItem("Exit", "Alt+F4")) {
                 // Request engine exit
@@ -498,8 +590,36 @@ void Editor::DrawMenuBar() {
         }
         
         if (ImGui::BeginMenu("Project")) {
-            if (ImGui::MenuItem("Project Settings")) {}
-            if (ImGui::MenuItem("Export")) {}
+            bool has_project = HasActiveProject();
+            
+            // Show current project name
+            if (has_project) {
+                ImGui::TextDisabled("Active: %s", m_active_project->GetName().c_str());
+                ImGui::Separator();
+            }
+            
+            if (ImGui::MenuItem("Project Settings...", nullptr, false, has_project)) {
+                // TODO: Show project settings dialog
+            }
+            if (ImGui::MenuItem("Save Project", nullptr, false, has_project)) {
+                if (m_active_project && m_active_project->Save()) {
+                    Log("Project saved", 0);
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Close Project", nullptr, false, has_project)) {
+                if (m_active_project) {
+                    m_active_project->Close();
+                    m_active_project.reset();
+                    m_current_scene_path.clear();
+                    m_scene_modified = false;
+                    Log("Project closed", 0);
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Export...", nullptr, false, has_project)) {
+                // TODO: Export project dialog
+            }
             ImGui::EndMenu();
         }
         
@@ -844,6 +964,9 @@ EditorNode* Editor::AddNode(const std::string& type, EditorNode* parent) {
     // Select the new node
     m_selected_node_id = node.id;
     
+    // Mark scene as modified
+    m_scene_modified = true;
+    
     return &parent->children.back();
 }
 
@@ -870,6 +993,7 @@ void Editor::DeleteNode(u32 node_id) {
     
     if (delete_from_parent(m_scene_root)) {
         m_selected_node_id = 0;
+        m_scene_modified = true;
         LOG_INFO("Deleted node {}", node_id);
     }
 }
@@ -938,6 +1062,18 @@ void Editor::SyncTransforms() {
                 transform->rotation = quat::from_euler(rx, ry, rz);
             }
             
+            // Update BoundsComponent world bounds for accurate picking
+            if (m_ecs->HasComponent<BoundsComponent>(node.entity)) {
+                auto* bounds = m_ecs->GetComponent<BoundsComponent>(node.entity);
+                vec3 half = bounds->local_bounds.extents();
+                // Scale the half-extents
+                vec3 scaled_half{half.x * node.scale.x, half.y * node.scale.y, half.z * node.scale.z};
+                bounds->world_bounds = AABB(
+                    node.position - scaled_half,
+                    node.position + scaled_half
+                );
+            }
+            
             // Update WorldManager object position and color
             vec4 color4 = vec4{node.color.x, node.color.y, node.color.z, 1.0f};
             m_world->UpdateObject(node.entity, node.position, color4);
@@ -966,6 +1102,75 @@ EditorNode* Editor::FindNode(u64 node_id, EditorNode& root) {
         if (auto* found = FindNode(node_id, child)) return found;
     }
     return nullptr;
+}
+
+EditorNode* Editor::FindNodeByEntity(Entity entity) {
+    return FindNodeByEntity(entity, m_scene_root);
+}
+
+EditorNode* Editor::FindNodeByEntity(Entity entity, EditorNode& root) {
+    if (root.entity == entity) return &root;
+    for (auto& child : root.children) {
+        if (auto* found = FindNodeByEntity(entity, child)) return found;
+    }
+    return nullptr;
+}
+
+void Editor::TryPickAtScreenPosition(float screen_x, float screen_y) {
+    if (m_play_mode) return;
+    if (IsGizmoManipulating()) return;
+    
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.KeyAlt || io.KeyCtrl) return;
+    
+    // Don't pick if mouse is over an ImGui widget (button, slider, tree node, etc.)
+    // This allows picking on the 3D scene background while preventing
+    // interference with UI panel interactions
+    if (ImGui::IsAnyItemHovered() || ImGui::IsAnyItemActive()) return;
+    
+    // Convert screen coordinates to NDC using full window dimensions
+    // Vulkan conventions: Y-flip in projection, depth range [0,1]
+    float window_w = (float)m_platform->GetWidth();
+    float window_h = (float)m_platform->GetHeight();
+    
+    float ndc_x = (2.0f * screen_x / window_w) - 1.0f;
+    float ndc_y = (2.0f * screen_y / window_h) - 1.0f;  // Vulkan: top=-1, bottom=+1
+    
+    // Build ray from renderer's camera
+    const Camera& cam = m_renderer->GetCamera();
+    mat4 inv_vp = cam.GetViewProjectionMatrix().inverse();
+    
+    vec4 ray_near = inv_vp * vec4(ndc_x, ndc_y, 0.0f, 1.0f);  // Vulkan near plane z=0
+    vec4 ray_far  = inv_vp * vec4(ndc_x, ndc_y, 1.0f, 1.0f);  // Vulkan far plane z=1
+    
+    if (std::abs(ray_near.w) > 0.0001f)
+        ray_near = ray_near * (1.0f / ray_near.w);
+    if (std::abs(ray_far.w) > 0.0001f)
+        ray_far = ray_far * (1.0f / ray_far.w);
+    
+    vec3 origin(ray_near.x, ray_near.y, ray_near.z);
+    vec3 dir = vec3(ray_far.x - ray_near.x, ray_far.y - ray_near.y, ray_far.z - ray_near.z).normalized();
+    
+    Ray pick_ray(origin, dir);
+    HandleViewportPick(pick_ray);
+}
+
+void Editor::HandleViewportPick(const Ray& ray) {
+    if (m_play_mode) return;  // Don't pick in play mode
+    
+    // Use WorldManager to pick objects
+    Entity picked_entity = m_world->PickObject(ray, 1000.0f);
+    
+    if (picked_entity != INVALID_ENTITY) {
+        // Find the EditorNode that owns this entity
+        EditorNode* node = FindNodeByEntity(picked_entity);
+        if (node) {
+            SetSelectedNode(node->id);
+        }
+    } else {
+        // Clicked on empty space - deselect
+        ClearSelection();
+    }
 }
 
 // ============================================================================
@@ -1052,6 +1257,276 @@ bool Editor::Redo() {
         return result;
     }
     return false;
+}
+
+// ============================================================================
+// Project Management
+// ============================================================================
+
+void Editor::DrawNewProjectPopup() {
+    if (m_show_new_project_popup) {
+        ImGui::OpenPopup("New Project");
+    }
+    
+    ImGui::SetNextWindowSize(ImVec2(500, 200), ImGuiCond_FirstUseEver);
+    if (ImGui::BeginPopupModal("New Project", &m_show_new_project_popup, ImGuiWindowFlags_NoResize)) {
+        ImGui::Text("Create a new ActionEngine project");
+        ImGui::Separator();
+        
+        ImGui::InputText("Project Name", m_new_project_name, sizeof(m_new_project_name));
+        
+        ImGui::InputText("Location", m_new_project_path, sizeof(m_new_project_path));
+        ImGui::SameLine();
+        if (ImGui::Button("Browse...")) {
+            std::string dir = m_platform->OpenFolderDialog("Select Project Location", m_new_project_path);
+            if (!dir.empty()) {
+                strncpy(m_new_project_path, dir.c_str(), sizeof(m_new_project_path) - 1);
+            }
+        }
+        
+        // Show full project path
+        std::string full_path = std::string(m_new_project_path) + "/" + std::string(m_new_project_name);
+        ImGui::TextDisabled("Project will be created at: %s", full_path.c_str());
+        
+        ImGui::Separator();
+        
+        if (ImGui::Button("Create", ImVec2(120, 0))) {
+            if (strlen(m_new_project_name) > 0 && strlen(m_new_project_path) > 0) {
+                auto project = Project::Create(m_new_project_name, m_new_project_path);
+                if (project) {
+                    // Clear existing scene content from WorldManager and ECS
+                    ClearCurrentScene();
+                    
+                    // Also clear WorldManager entirely for fresh start
+                    m_world->Clear();
+                    
+                    m_active_project = std::move(project);
+                    m_current_scene_path.clear();
+                    m_scene_modified = false;
+                    Log("Created project: " + std::string(m_new_project_name), 0);
+                    m_show_new_project_popup = false;
+                    ImGui::CloseCurrentPopup();
+                } else {
+                    Log("Failed to create project", 2);
+                }
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            m_show_new_project_popup = false;
+            ImGui::CloseCurrentPopup();
+        }
+        
+        ImGui::EndPopup();
+    }
+}
+
+bool Editor::NewProject() {
+    m_show_new_project_popup = true;
+    return true;
+}
+
+bool Editor::OpenProject() {
+    std::string filter = "ActionEngine Project|*.aeproj|All Files|*.*";
+    std::string filepath = m_platform->OpenFileDialog("Open Project", filter, "");
+    
+    if (!filepath.empty()) {
+        return OpenProject(filepath);
+    }
+    return false;
+}
+
+bool Editor::OpenProject(const std::string& path) {
+    auto project = Project::Open(path);
+    if (project) {
+        // Close current project if any
+        if (m_active_project) {
+            m_active_project->Close();
+        }
+        
+        // Clear existing scene content before loading new project
+        // Clear existing scene content from WorldManager and ECS
+        ClearCurrentScene();
+        
+        // Also clear WorldManager entirely for fresh start
+        m_world->Clear();
+        
+        m_active_project = std::move(project);
+        m_current_scene_path.clear();
+        m_scene_modified = false;
+        
+        Log("Opened project: " + m_active_project->GetName(), 0);
+        
+        // Load default scene if available and file exists
+        const auto& scenes = m_active_project->GetScenes();
+        if (!scenes.empty()) {
+            std::string scene_path = m_active_project->GetScenePath(scenes[0]);
+            if (!scene_path.empty() && std::filesystem::exists(scene_path)) {
+                LoadScene(scene_path);
+            } else {
+                // Scene is in project list but file doesn't exist yet - that's ok for new projects
+                Log("Starting with empty scene (no saved scene file)", 0);
+            }
+        }
+        
+        return true;
+    }
+    
+    Log("Failed to open project: " + path, 2);
+    return false;
+}
+
+bool Editor::SaveScene() {
+    if (!m_active_project) {
+        Log("No active project - create or open a project first", 1);
+        return false;
+    }
+    
+    if (m_current_scene_path.empty()) {
+        return SaveSceneAs();
+    }
+    
+    SceneSerializer serializer(*m_ecs, *this);
+    if (serializer.SaveScene(m_current_scene_path)) {
+        m_scene_modified = false;
+        Log("Saved scene: " + m_current_scene_path, 0);
+        return true;
+    }
+    
+    Log("Failed to save scene", 2);
+    return false;
+}
+
+bool Editor::SaveSceneAs() {
+    if (!m_active_project) {
+        Log("No active project - create or open a project first", 1);
+        return false;
+    }
+    
+    std::string filter = "Scene Files|*.aescene|All Files|*.*";
+    std::string scenes_dir = m_active_project->GetScenesPath();
+    std::string filepath = m_platform->SaveFileDialog("Save Scene As", filter, scenes_dir);
+    
+    if (!filepath.empty()) {
+        // Ensure .aescene extension
+        if (filepath.find(".aescene") == std::string::npos) {
+            filepath += ".aescene";
+        }
+        
+        SceneSerializer serializer(*m_ecs, *this);
+        if (serializer.SaveScene(filepath)) {
+            m_current_scene_path = filepath;
+            m_scene_modified = false;
+            
+            // Add to project's scene list
+            std::string scene_name = filepath.substr(filepath.find_last_of("/\\") + 1);
+            scene_name = scene_name.substr(0, scene_name.find(".aescene"));
+            m_active_project->AddScene(scene_name);
+            m_active_project->Save();
+            
+            Log("Saved scene: " + filepath, 0);
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+bool Editor::LoadScene(const std::string& path) {
+    if (!m_active_project) {
+        Log("No active project", 1);
+        return false;
+    }
+    
+    SceneSerializer serializer(*m_ecs, *this);
+    if (serializer.LoadScene(path)) {
+        m_current_scene_path = path;
+        m_scene_modified = false;
+        Log("Loaded scene: " + path, 0);
+        return true;
+    }
+    
+    Log("Failed to load scene: " + path, 2);
+    return false;
+}
+
+// ============================================================================
+// Helper Methods
+// ============================================================================
+
+void Editor::ClearCurrentScene() {
+    // Remove objects from WorldManager first
+    for (auto& child : m_scene_root.children) {
+        if (child.entity != INVALID_ENTITY) {
+            m_world->RemoveObject(child.entity);
+        }
+    }
+    
+    // Then destroy ECS entities
+    for (auto& child : m_scene_root.children) {
+        if (child.entity != INVALID_ENTITY && m_ecs->IsAlive(child.entity)) {
+            m_ecs->DestroyEntity(child.entity);
+        }
+    }
+    m_scene_root.children.clear();
+    m_selected_node_id = 0;
+    m_selected_node_ids.clear();
+}
+
+void Editor::PromptSaveBeforeAction(std::function<void()> on_proceed) {
+    m_pending_action = on_proceed;
+    m_show_unsaved_changes_popup = true;
+}
+
+void Editor::DrawUnsavedChangesPopup() {
+    if (m_show_unsaved_changes_popup) {
+        ImGui::OpenPopup("Unsaved Changes");
+    }
+    
+    ImGui::SetNextWindowSize(ImVec2(400, 150), ImGuiCond_FirstUseEver);
+    if (ImGui::BeginPopupModal("Unsaved Changes", &m_show_unsaved_changes_popup, ImGuiWindowFlags_NoResize)) {
+        ImGui::TextWrapped("You have unsaved changes. Would you like to save before continuing?");
+        ImGui::Spacing();
+        ImGui::Spacing();
+        
+        ImGui::Separator();
+        
+        // Save button
+        if (ImGui::Button("Save", ImVec2(100, 0))) {
+            if (SaveScene()) {
+                m_show_unsaved_changes_popup = false;
+                ImGui::CloseCurrentPopup();
+                if (m_pending_action) {
+                    m_pending_action();
+                    m_pending_action = nullptr;
+                }
+            }
+        }
+        
+        ImGui::SameLine();
+        
+        // Don't Save button
+        if (ImGui::Button("Don't Save", ImVec2(100, 0))) {
+            m_scene_modified = false;  // Discard changes
+            m_show_unsaved_changes_popup = false;
+            ImGui::CloseCurrentPopup();
+            if (m_pending_action) {
+                m_pending_action();
+                m_pending_action = nullptr;
+            }
+        }
+        
+        ImGui::SameLine();
+        
+        // Cancel button
+        if (ImGui::Button("Cancel", ImVec2(100, 0))) {
+            m_show_unsaved_changes_popup = false;
+            m_pending_action = nullptr;
+            ImGui::CloseCurrentPopup();
+        }
+        
+        ImGui::EndPopup();
+    }
 }
 
 } // namespace action
