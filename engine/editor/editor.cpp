@@ -51,6 +51,13 @@ bool Editor::Initialize(Renderer& renderer, Platform& platform, ECS& ecs,
         }
     });
     
+    // Set up Scene tree delete callback
+    m_scene_tree_panel->SetDeleteCallback([this](u32 node_id) {
+        if (node_id != 0 && node_id != m_scene_root.id) {
+            DeleteNode(node_id);
+        }
+    });
+    
     // Create primitive meshes for adding nodes
     CreatePrimitiveMeshes();
     
@@ -973,14 +980,24 @@ EditorNode* Editor::AddNode(const std::string& type, EditorNode* parent) {
 void Editor::DeleteNode(u32 node_id) {
     if (node_id == 0 || node_id == m_scene_root.id) return;
     
-    // Recursive function to find and delete
+    // Recursively clean up a node and all its children from WorldManager and ECS
+    std::function<void(EditorNode&)> cleanup_node = [&](EditorNode& node) {
+        for (auto& child : node.children) {
+            cleanup_node(child);
+        }
+        if (node.entity != INVALID_ENTITY) {
+            m_world->RemoveObject(node.entity);
+            if (m_ecs->IsAlive(node.entity)) {
+                m_ecs->DestroyEntity(node.entity);
+            }
+        }
+    };
+    
+    // Find and delete the node from its parent
     std::function<bool(EditorNode&)> delete_from_parent = [&](EditorNode& parent) -> bool {
         for (auto it = parent.children.begin(); it != parent.children.end(); ++it) {
             if (it->id == node_id) {
-                // Destroy ECS entity if exists
-                if (it->entity != INVALID_ENTITY) {
-                    m_ecs->DestroyEntity(it->entity);
-                }
+                cleanup_node(*it);
                 parent.children.erase(it);
                 return true;
             }
@@ -993,6 +1010,7 @@ void Editor::DeleteNode(u32 node_id) {
     
     if (delete_from_parent(m_scene_root)) {
         m_selected_node_id = 0;
+        m_selected_node_ids.clear();
         m_scene_modified = true;
         LOG_INFO("Deleted node {}", node_id);
     }
