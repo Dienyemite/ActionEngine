@@ -23,6 +23,12 @@ void SceneTreePanel::Draw(EditorNode& root, u32& selected_id, std::vector<u32>& 
         DrawNode(root, selected_id, selected_ids);
     }
     ImGui::End();
+    
+    // Process pending delete (outside of ImGui window context)
+    if (m_pending_delete_id != 0 && m_delete_callback) {
+        m_delete_callback(m_pending_delete_id);
+        m_pending_delete_id = 0;
+    }
 }
 
 void SceneTreePanel::DrawNode(EditorNode& node, u32& selected_id, std::vector<u32>& selected_ids) {
@@ -148,7 +154,7 @@ void SceneTreePanel::DrawContextMenu(EditorNode& node) {
         // TODO: Rename node
     }
     if (ImGui::MenuItem("Delete", "Del")) {
-        // TODO: Delete node
+        m_pending_delete_id = node.id;
     }
     
     ImGui::Separator();

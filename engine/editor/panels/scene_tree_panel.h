@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/types.h"
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -9,6 +10,8 @@ namespace action {
 // Forward declare from editor.h
 struct EditorNode;
 class Editor;
+
+using SceneTreeDeleteCallback = std::function<void(u32)>;
 
 /*
  * SceneTreePanel - Hierarchical node browser (Godot-style)
@@ -28,6 +31,9 @@ public:
     
     void Draw(EditorNode& root, u32& selected_id, std::vector<u32>& selected_ids);
     
+    // Set callback for delete action
+    void SetDeleteCallback(SceneTreeDeleteCallback callback) { m_delete_callback = callback; }
+    
     bool visible = true;
     
 private:
@@ -36,6 +42,9 @@ private:
     
     const char* GetNodeIcon(const std::string& type);
     bool IsSelected(u32 node_id, const std::vector<u32>& selected_ids);
+    
+    SceneTreeDeleteCallback m_delete_callback;
+    u32 m_pending_delete_id = 0;  // Node ID to delete (processed after ImGui frame)
 };
 
 } // namespace action
