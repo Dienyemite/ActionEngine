@@ -23,10 +23,14 @@ Resource::~Resource() {
     }
 }
 
-void Resource::Release() {
-    if (--m_ref_count <= 0) {
-        // Resource can be garbage collected
-        // The ResourceCache will handle actual deletion
+long Resource::GetUseCount() const {
+    // Try to get the shared_ptr use_count. This is safe because enable_shared_from_this
+    // stores a weak_ptr internally. If no shared_ptr manages this object, return 0.
+    try {
+        auto sp = const_cast<Resource*>(this)->shared_from_this();
+        return sp.use_count() - 1; // Subtract the temporary we just created
+    } catch (const std::bad_weak_ptr&) {
+        return 0; // Not managed by shared_ptr
     }
 }
 

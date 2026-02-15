@@ -8,6 +8,7 @@ namespace action {
 
 thread_local std::vector<u32> Profiler::t_scope_stack;
 thread_local u32 Profiler::t_current_depth = 0;
+thread_local u64 Profiler::t_last_frame = 0;
 
 Profiler::Profiler() {
 #ifdef PLATFORM_WINDOWS
@@ -42,8 +43,14 @@ void Profiler::BeginFrame() {
     std::lock_guard lock(m_mutex);
     m_last_frame_samples = std::move(m_current_samples);
     m_current_samples.clear();
+
+    // Increment frame counter - worker threads detect this and reset their own state
+    m_frame_counter.fetch_add(1, std::memory_order_release);
+
+    // Reset the calling (main) thread's state
     t_scope_stack.clear();
     t_current_depth = 0;
+    t_last_frame = m_frame_counter.load(std::memory_order_relaxed);
 }
 
 void Profiler::EndFrame() {
@@ -52,13 +59,21 @@ void Profiler::EndFrame() {
 
 void Profiler::BeginScope(const char* name) {
     if (!m_enabled) return;
-    
+
+    // Detect frame boundary: if the frame counter advanced, reset this thread's state
+    u64 current_frame = m_frame_counter.load(std::memory_order_acquire);
+    if (t_last_frame != current_frame) {
+        t_scope_stack.clear();
+        t_current_depth = 0;
+        t_last_frame = current_frame;
+    }
+
     ProfileSample sample;
     sample.name = name;
     sample.start_time = GetTimestamp();
     sample.depth = t_current_depth++;
     sample.thread_id = GetThreadId();
-    
+
     std::lock_guard lock(m_mutex);
     t_scope_stack.push_back(static_cast<u32>(m_current_samples.size()));
     m_current_samples.push_back(sample);
@@ -66,23 +81,32 @@ void Profiler::BeginScope(const char* name) {
 
 void Profiler::EndScope() {
     if (!m_enabled) return;
-    
+
+    // Detect frame boundary: if scope stack was invalidated, bail out safely
+    u64 current_frame = m_frame_counter.load(std::memory_order_acquire);
+    if (t_last_frame != current_frame) {
+        t_scope_stack.clear();
+        t_current_depth = 0;
+        t_last_frame = current_frame;
+        return;  // Sample was lost due to frame boundary - safe to skip
+    }
+
     u64 end_time = GetTimestamp();
-    t_current_depth--;
-    
+    if (t_current_depth > 0) t_current_depth--;
+
     std::lock_guard lock(m_mutex);
     if (!t_scope_stack.empty()) {
         u32 sample_index = t_scope_stack.back();
         t_scope_stack.pop_back();
-        
+
         if (sample_index < m_current_samples.size()) {
             m_current_samples[sample_index].end_time = end_time;
-            
+
             // Update aggregate stats
             auto& sample = m_current_samples[sample_index];
-            float duration_ms = static_cast<float>(sample.end_time - sample.start_time) 
+            float duration_ms = static_cast<float>(sample.end_time - sample.start_time)
                               * 1000.0f / m_frequency;
-            
+
             auto& stats = m_aggregate_stats[sample.name];
             stats.name = sample.name;
             stats.call_count++;
@@ -94,7 +118,7 @@ void Profiler::EndScope() {
 }
 
 std::vector<Profiler::ScopeStats> Profiler::GetAggregateStats() const {
-    std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
+    std::lock_guard lock(m_mutex);
     
     std::vector<ScopeStats> result;
     result.reserve(m_aggregate_stats.size());

@@ -34,9 +34,9 @@ bool JobSystem::Initialize(u32 worker_count) {
     m_worker_count = worker_count;
     m_running = true;
     
-    // Initialize counters
-    for (auto& counter : m_counters) {
-        counter.store(0);
+    // Initialize counter slots as free
+    for (auto& slot : m_counter_slots) {
+        slot.value.store(COUNTER_FREE, std::memory_order_relaxed);
     }
     
     LOG_INFO("JobSystem: Starting {} worker threads", worker_count);
@@ -81,38 +81,54 @@ void JobSystem::Shutdown() {
 }
 
 JobHandle JobSystem::Submit(JobFunction func, JobPriority priority) {
+    auto* counter = AllocateCounter();
+    if (!counter) {
+        // Pool exhausted - execute inline as fallback
+        LOG_WARN("JobSystem: Counter pool exhausted, executing job inline");
+        func();
+        return {};
+    }
+
+    counter->store(1, std::memory_order_relaxed);
+
     Job job{
         .function = std::move(func),
         .priority = priority,
-        .counter = AllocateCounter()
+        .counter = counter
     };
-    
-    job.counter->store(1);
-    JobHandle handle{job.counter};
-    
+    JobHandle handle{counter};
+
     auto& queue = m_queues[static_cast<u32>(priority)];
     {
         std::lock_guard lock(queue.mutex);
         queue.jobs.push_back(std::move(job));
     }
-    
+
     m_pending_jobs++;
     queue.cv.notify_one();
-    
+
     return handle;
 }
 
 JobHandle JobSystem::SubmitBatch(std::span<Job> jobs) {
     if (jobs.empty()) return {};
-    
+
     auto* counter = AllocateCounter();
-    counter->store(static_cast<u32>(jobs.size()));
+    if (!counter) {
+        LOG_WARN("JobSystem: Counter pool exhausted, executing batch inline");
+        for (auto& job : jobs) {
+            if (job.function) job.function();
+        }
+        return {};
+    }
+
+    counter->store(static_cast<u32>(jobs.size()), std::memory_order_relaxed);
     JobHandle handle{counter};
-    
+
     // Group by priority and submit
     for (auto& job : jobs) {
         job.counter = counter;
-        
+
         auto& queue = m_queues[static_cast<u32>(job.priority)];
         {
             std::lock_guard lock(queue.mutex);
@@ -120,18 +136,26 @@ JobHandle JobSystem::SubmitBatch(std::span<Job> jobs) {
         }
         queue.cv.notify_one();
     }
-    
+
     m_pending_jobs += static_cast<u32>(jobs.size());
     return handle;
 }
 
-JobHandle JobSystem::ParallelFor(u32 count, std::function<void(u32, u32)> func, 
+JobHandle JobSystem::ParallelFor(u32 count, std::function<void(u32, u32)> func,
                                   u32 batch_size, JobPriority priority) {
     if (count == 0) return {};
-    
+
     u32 batch_count = (count + batch_size - 1) / batch_size;
     auto* counter = AllocateCounter();
-    counter->store(batch_count);
+    if (!counter) {
+        LOG_WARN("JobSystem: Counter pool exhausted, executing ParallelFor inline");
+        for (u32 i = 0; i < count; ++i) {
+            func(i, 0);
+        }
+        return {};
+    }
+
+    counter->store(batch_count, std::memory_order_relaxed);
     JobHandle handle{counter};
     
     auto& queue = m_queues[static_cast<u32>(priority)];
@@ -269,12 +293,27 @@ bool JobSystem::TryExecuteJob() {
 }
 
 std::atomic<u32>* JobSystem::AllocateCounter() {
-    u32 index = m_counter_index.fetch_add(1) % MAX_COUNTERS;
-    return &m_counters[index];
+    // Scan for a free counter slot using CAS to prevent races.
+    // A counter is free when its value is COUNTER_FREE (0), meaning all
+    // previous jobs using it have completed.
+    for (u32 attempts = 0; attempts < MAX_COUNTERS; ++attempts) {
+        u32 index = m_counter_index.fetch_add(1, std::memory_order_relaxed) % MAX_COUNTERS;
+        u32 expected = COUNTER_FREE;
+        // Atomically claim: only succeed if the counter is truly free (value == 0)
+        if (m_counter_slots[index].value.compare_exchange_strong(
+                expected, COUNTER_RESERVED,
+                std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            return &m_counter_slots[index].value;
+        }
+    }
+
+    LOG_ERROR("JobSystem: Counter pool exhausted ({} slots all in flight)", MAX_COUNTERS);
+    return nullptr;
 }
 
 void JobSystem::FreeCounter(std::atomic<u32>* counter) {
-    // Counters are reused via circular buffer, no explicit free needed
+    // Counters are freed automatically when their value reaches 0 (COUNTER_FREE),
+    // making them available for AllocateCounter's CAS.
     (void)counter;
 }
 

@@ -682,7 +682,10 @@ const JPH::BodyInterface& JoltPhysics::GetBodyInterface() const {
 // ===== Collision Callbacks =====
 
 void JoltPhysics::OnContactAdded(const JoltContactInfo& info) {
-    m_contacts_this_frame.push_back(info);
+    {
+        std::lock_guard lock(m_contacts_mutex);
+        m_contacts_this_frame.push_back(info);
+    }
     if (m_contact_added_callback) {
         m_contact_added_callback(info);
     }

@@ -59,9 +59,13 @@ public:
     bool HasFailed() const { return m_state == ResourceState::Failed; }
     
     // ===== Reference Counting =====
-    void AddRef() { ++m_ref_count; }
-    void Release();
-    int GetRefCount() const { return m_ref_count.load(); }
+    // Lifetime is managed by shared_ptr (Ref<T>). Use shared_from_this() to
+    // obtain additional references. GetRefCount() returns the shared_ptr use_count.
+    // AddRef/Release are deprecated no-ops kept for API compatibility.
+    void AddRef() {}
+    void Release() {}
+    long GetRefCount() const { return GetUseCount(); }
+    long GetUseCount() const;
     
     // ===== Memory =====
     virtual size_t GetMemoryUsage() const { return sizeof(*this); }
@@ -94,7 +98,6 @@ private:
     ResourceID m_id = INVALID_RESOURCE_ID;
     std::string m_path;
     ResourceState m_state = ResourceState::Unloaded;
-    std::atomic<int> m_ref_count{0};
     bool m_dirty = false;
     
     std::unordered_map<std::string, std::string> m_import_settings;

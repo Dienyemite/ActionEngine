@@ -29,16 +29,15 @@ void SceneTree::Shutdown() {
 }
 
 void SceneTree::SetRoot(std::shared_ptr<Node> root) {
-    // Exit old root
+    // Exit old root (also unregisters all nodes via ExitTree → UnregisterNode)
     if (m_root && m_root->IsInsideTree()) {
         m_root->ExitTree();
     }
-    
+
     m_root = root;
-    
-    // Enter new root
+
+    // Enter new root (EnterTree now calls RegisterNode for each node)
     if (m_root) {
-        RegisterNode(m_root.get());
         m_root->EnterTree(this);
     }
 }
@@ -104,21 +103,15 @@ Node* SceneTree::GetNodeByPath(const std::string& path) const {
 void SceneTree::RegisterNode(Node* node) {
     if (!node) return;
     m_node_registry[node->GetID()] = node;
-    
-    // Register children recursively
-    for (size_t i = 0; i < node->GetChildCount(); ++i) {
-        RegisterNode(node->GetChild(i).get());
-    }
+    // Note: children are NOT registered here recursively because EnterTree()
+    // propagates to each child, and each child calls RegisterNode() on itself.
 }
 
 void SceneTree::UnregisterNode(Node* node) {
     if (!node) return;
     m_node_registry.erase(node->GetID());
-    
-    // Unregister children recursively
-    for (size_t i = 0; i < node->GetChildCount(); ++i) {
-        UnregisterNode(node->GetChild(i).get());
-    }
+    // Note: children are NOT unregistered here because ExitTree() propagates
+    // in reverse order and each child calls UnregisterNode() on itself.
 }
 
 // ===== Groups =====

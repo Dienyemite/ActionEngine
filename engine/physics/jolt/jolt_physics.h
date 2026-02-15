@@ -40,6 +40,7 @@
 #include <Jolt/Physics/Collision/ShapeCast.h>
 
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 #include <functional>
 
@@ -222,9 +223,12 @@ public:
     JPH::BodyInterface& GetBodyInterface();
     const JPH::BodyInterface& GetBodyInterface() const;
     
-    // Get collision events this frame
+    // Get collision events this frame (call only after Update() returns)
     const std::vector<JoltContactInfo>& GetContactsThisFrame() const { return m_contacts_this_frame; }
-    void ClearContactsThisFrame() { m_contacts_this_frame.clear(); }
+    void ClearContactsThisFrame() {
+        std::lock_guard lock(m_contacts_mutex);
+        m_contacts_this_frame.clear();
+    }
     
     // Called by contact listener
     void OnContactAdded(const JoltContactInfo& info);
@@ -262,7 +266,8 @@ private:
     std::unordered_map<Entity, JPH::BodyID> m_entity_to_body;
     std::unordered_map<uint32_t, Entity> m_body_to_entity;  // Key is BodyID index
     
-    // Collision events
+    // Collision events - mutex protects concurrent push_back from Jolt worker threads
+    mutable std::mutex m_contacts_mutex;
     std::vector<JoltContactInfo> m_contacts_this_frame;
     CollisionCallback m_contact_added_callback;
     CollisionCallback m_contact_persisted_callback;
