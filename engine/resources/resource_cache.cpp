@@ -1,6 +1,7 @@
 #include "resource_cache.h"
 #include "core/logging.h"
 #include <algorithm>
+#include <cstdint>
 
 namespace action {
 
@@ -30,7 +31,7 @@ void ResourceCache::Add(Ref<Resource> resource) {
     
     CacheEntry entry;
     entry.resource = resource;
-    entry.last_access_time = m_current_time;
+    entry.last_access_order = ++m_access_counter;
     entry.memory_size = resource->GetMemoryUsage();
     
     if (!path.empty()) {
@@ -51,8 +52,8 @@ Ref<Resource> ResourceCache::Get(const std::string& path) const {
     
     auto it = m_resources_by_path.find(path);
     if (it != m_resources_by_path.end()) {
-        // Update access time (const_cast for LRU tracking)
-        const_cast<CacheEntry&>(it->second).last_access_time = m_current_time;
+        // Update access order for LRU tracking (m_access_counter is mutable)
+        const_cast<CacheEntry&>(it->second).last_access_order = ++m_access_counter;
         return it->second.resource;
     }
     
@@ -129,17 +130,17 @@ void ResourceCache::GarbageCollect() {
 
 void ResourceCache::EvictToMemory(size_t target_bytes) {
     if (m_memory_usage <= target_bytes) return;
-    
-    // Sort by last access time
-    std::vector<std::pair<std::string, float>> entries;
+
+    // Sort by last access order
+    std::vector<std::pair<std::string, u64>> entries;
     for (const auto& [path, entry] : m_resources_by_path) {
         // Only evict resources with single reference (cache only)
         if (entry.resource.use_count() == 1) {
-            entries.emplace_back(path, entry.last_access_time);
+            entries.emplace_back(path, entry.last_access_order);
         }
     }
-    
-    // Sort oldest first
+
+    // Sort oldest first (lowest access counter = least recently used)
     std::sort(entries.begin(), entries.end(),
         [](const auto& a, const auto& b) { return a.second < b.second; });
     
@@ -158,18 +159,24 @@ void ResourceCache::EvictToMemory(size_t target_bytes) {
 
 void ResourceCache::EvictLRU() {
     // Find oldest entry with single reference
-    float oldest_time = m_current_time;
+    u64 oldest_order = UINT64_MAX;
     std::string oldest_path;
-    
+
     for (const auto& [path, entry] : m_resources_by_path) {
-        if (entry.resource.use_count() == 1 && entry.last_access_time < oldest_time) {
-            oldest_time = entry.last_access_time;
+        if (entry.resource.use_count() == 1 && entry.last_access_order < oldest_order) {
+            oldest_order = entry.last_access_order;
             oldest_path = path;
         }
     }
-    
+
     if (!oldest_path.empty()) {
-        Remove(oldest_path);
+        // Inline removal to avoid deadlock (caller may hold m_mutex)
+        auto it = m_resources_by_path.find(oldest_path);
+        if (it != m_resources_by_path.end()) {
+            m_memory_usage -= it->second.memory_size;
+            m_path_by_id.erase(it->second.resource->GetID());
+            m_resources_by_path.erase(it);
+        }
     }
 }
 

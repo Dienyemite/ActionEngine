@@ -131,12 +131,19 @@ private:
     std::queue<JobFunction> m_main_thread_queue;
     
     // Counter pool for job handles
+    // Each slot is cache-line aligned to prevent false sharing
     static constexpr size_t MAX_COUNTERS = 256;
-    std::array<std::atomic<u32>, MAX_COUNTERS> m_counters;
+    static constexpr u32 COUNTER_FREE = 0;       // Available for allocation
+    static constexpr u32 COUNTER_RESERVED = UINT32_MAX; // Claimed but not yet initialized
+
+    struct alignas(64) CounterSlot {
+        std::atomic<u32> value{COUNTER_FREE};
+    };
+    std::array<CounterSlot, MAX_COUNTERS> m_counter_slots;
     std::atomic<u32> m_counter_index{0};
-    
+
     std::atomic<u32> m_pending_jobs{0};
-    
+
     std::atomic<u32>* AllocateCounter();
     void FreeCounter(std::atomic<u32>* counter);
 };
