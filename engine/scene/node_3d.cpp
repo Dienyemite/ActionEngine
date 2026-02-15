@@ -1,5 +1,6 @@
 #include "node_3d.h"
 #include "core/logging.h"
+#include <algorithm>
 #include <cmath>
 
 namespace action {
@@ -61,42 +62,100 @@ void Node3D::SetGlobalPosition(const vec3& pos) {
 }
 
 vec3 Node3D::GetGlobalRotation() const {
-    // Simplified - accumulate parent rotations
-    vec3 global_rot = m_rotation;
-    Node3D* parent = dynamic_cast<Node3D*>(GetParent());
-    while (parent) {
-        global_rot.x += parent->m_rotation.x;
-        global_rot.y += parent->m_rotation.y;
-        global_rot.z += parent->m_rotation.z;
-        parent = dynamic_cast<Node3D*>(parent->GetParent());
-    }
-    return global_rot;
+    // Extract YXZ Euler angles from the global transform matrix.
+    // Euler angles are NOT additive (adding parent angles is mathematically wrong
+    // when parent axes are rotated), so we decompose from the composed matrix.
+    UpdateGlobalTransform();
+
+    // In this engine's storage convention, columns[i].xyz stores row i of the
+    // TRS matrix. Each row is the corresponding rotation row scaled by scale:
+    //   columns[i].xyz = scale_i * R_row_i
+    // Scale is the length of each stored column's xyz.
+    float sx = std::sqrt(
+        m_global_transform.columns[0].x * m_global_transform.columns[0].x +
+        m_global_transform.columns[0].y * m_global_transform.columns[0].y +
+        m_global_transform.columns[0].z * m_global_transform.columns[0].z);
+    float sy = std::sqrt(
+        m_global_transform.columns[1].x * m_global_transform.columns[1].x +
+        m_global_transform.columns[1].y * m_global_transform.columns[1].y +
+        m_global_transform.columns[1].z * m_global_transform.columns[1].z);
+    float sz = std::sqrt(
+        m_global_transform.columns[2].x * m_global_transform.columns[2].x +
+        m_global_transform.columns[2].y * m_global_transform.columns[2].y +
+        m_global_transform.columns[2].z * m_global_transform.columns[2].z);
+
+    constexpr float EPSILON = 0.0001f;
+    constexpr float RAD_TO_DEG = 180.0f / 3.14159265359f;
+
+    // De-scale to get pure rotation matrix rows
+    // R[0][2] = columns[0].z / sx,  R[1][2] = columns[1].z / sy,  R[2][2] = columns[2].z / sz
+    // R[0][0] = columns[0].x / sx,  R[0][1] = columns[0].y / sx
+    float r02 = (sx > EPSILON) ? m_global_transform.columns[0].z / sx : 0.0f;
+    float r12 = (sy > EPSILON) ? m_global_transform.columns[1].z / sy : 0.0f;
+    float r22 = (sz > EPSILON) ? m_global_transform.columns[2].z / sz : 0.0f;
+    float r00 = (sx > EPSILON) ? m_global_transform.columns[0].x / sx : 1.0f;
+    float r01 = (sx > EPSILON) ? m_global_transform.columns[0].y / sx : 0.0f;
+
+    // Extract YXZ Euler angles (same formulas as SetLocalTransform)
+    vec3 euler;
+    euler.x = std::atan2(-r12, r22) * RAD_TO_DEG;
+    euler.y = std::asin(std::clamp(r02, -1.0f, 1.0f)) * RAD_TO_DEG;
+    euler.z = std::atan2(-r01, r00) * RAD_TO_DEG;
+
+    return euler;
 }
 
 void Node3D::SetGlobalRotation(const vec3& euler) {
     Node3D* parent = dynamic_cast<Node3D*>(GetParent());
-    if (parent) {
-        vec3 parent_rot = parent->GetGlobalRotation();
-        SetRotation(vec3{
-            euler.x - parent_rot.x,
-            euler.y - parent_rot.y,
-            euler.z - parent_rot.z
-        });
-    } else {
+    if (!parent) {
         SetRotation(euler);
+        return;
     }
+
+    // Build desired global transform with the target rotation, current global
+    // position, and current local scale. Then compute local = parent_inv * desired
+    // and decompose the local transform to extract position/rotation/scale.
+    constexpr float D2R = 3.14159265359f / 180.0f;
+    vec3 rad{euler.x * D2R, euler.y * D2R, euler.z * D2R};
+    float cx = std::cos(rad.x), sx = std::sin(rad.x);
+    float cy = std::cos(rad.y), sy = std::sin(rad.y);
+    float cz = std::cos(rad.z), sz = std::sin(rad.z);
+
+    vec3 gpos = GetGlobalPosition();
+    float s_x = m_scale.x, s_y = m_scale.y, s_z = m_scale.z;
+
+    // Build desired global TRS (rows stored in columns, matching engine convention)
+    mat4 desired = mat4::Identity();
+    desired.columns[0] = vec4{(cy*cz+sy*sx*sz)*s_x, (cz*sy*sx-cy*sz)*s_y, cx*sy*s_z, 0};
+    desired.columns[1] = vec4{cx*sz*s_x, cx*cz*s_y, -sx*s_z, 0};
+    desired.columns[2] = vec4{(cy*sx*sz-cz*sy)*s_x, (sy*sz+cy*cz*sx)*s_y, cy*cx*s_z, 0};
+    desired.columns[3] = vec4{gpos.x, gpos.y, gpos.z, 1.0f};
+
+    mat4 parent_inv = parent->GetGlobalTransform().Inverse();
+    mat4 local = parent_inv * desired;
+    SetLocalTransform(local);
 }
 
 vec3 Node3D::GetGlobalScale() const {
-    vec3 global_scale = m_scale;
-    Node3D* parent = dynamic_cast<Node3D*>(GetParent());
-    while (parent) {
-        global_scale.x *= parent->m_scale.x;
-        global_scale.y *= parent->m_scale.y;
-        global_scale.z *= parent->m_scale.z;
-        parent = dynamic_cast<Node3D*>(parent->GetParent());
-    }
-    return global_scale;
+    // Extract scale from the global transform matrix.
+    // In this engine's storage convention, columns[i].xyz = scale_i * R_row_i.
+    // Since rotation rows have unit length, the scale is the length of each column's xyz.
+    UpdateGlobalTransform();
+
+    float sx = std::sqrt(
+        m_global_transform.columns[0].x * m_global_transform.columns[0].x +
+        m_global_transform.columns[0].y * m_global_transform.columns[0].y +
+        m_global_transform.columns[0].z * m_global_transform.columns[0].z);
+    float sy = std::sqrt(
+        m_global_transform.columns[1].x * m_global_transform.columns[1].x +
+        m_global_transform.columns[1].y * m_global_transform.columns[1].y +
+        m_global_transform.columns[1].z * m_global_transform.columns[1].z);
+    float sz = std::sqrt(
+        m_global_transform.columns[2].x * m_global_transform.columns[2].x +
+        m_global_transform.columns[2].y * m_global_transform.columns[2].y +
+        m_global_transform.columns[2].z * m_global_transform.columns[2].z);
+
+    return vec3{sx, sy, sz};
 }
 
 mat4 Node3D::GetLocalTransform() const {
@@ -194,21 +253,44 @@ void Node3D::MarkTransformDirty() {
 }
 
 vec3 Node3D::GetForward() const {
-    // -Z in local space
+    // -Z direction transformed by this node's local rotation.
+    // In this engine, columns[i].xyz stores scaled rotation row i.
+    // columns[2].xyz / |columns[2].xyz| gives the local Z axis direction.
+    mat4 local = GetLocalTransform();
+    vec3 z_axis{local.columns[2].x, local.columns[2].y, local.columns[2].z};
+    float len = std::sqrt(z_axis.x * z_axis.x + z_axis.y * z_axis.y + z_axis.z * z_axis.z);
+    if (len > 0.0001f) {
+        float inv_len = 1.0f / len;
+        return vec3{-z_axis.x * inv_len, -z_axis.y * inv_len, -z_axis.z * inv_len};
+    }
     return vec3{0, 0, -1};
 }
 
 vec3 Node3D::GetRight() const {
+    mat4 local = GetLocalTransform();
+    vec3 x_axis{local.columns[0].x, local.columns[0].y, local.columns[0].z};
+    float len = std::sqrt(x_axis.x * x_axis.x + x_axis.y * x_axis.y + x_axis.z * x_axis.z);
+    if (len > 0.0001f) {
+        float inv_len = 1.0f / len;
+        return vec3{x_axis.x * inv_len, x_axis.y * inv_len, x_axis.z * inv_len};
+    }
     return vec3{1, 0, 0};
 }
 
 vec3 Node3D::GetUp() const {
+    mat4 local = GetLocalTransform();
+    vec3 y_axis{local.columns[1].x, local.columns[1].y, local.columns[1].z};
+    float len = std::sqrt(y_axis.x * y_axis.x + y_axis.y * y_axis.y + y_axis.z * y_axis.z);
+    if (len > 0.0001f) {
+        float inv_len = 1.0f / len;
+        return vec3{y_axis.x * inv_len, y_axis.y * inv_len, y_axis.z * inv_len};
+    }
     return vec3{0, 1, 0};
 }
 
 vec3 Node3D::GetGlobalForward() const {
+    // -Z direction in world space from the global transform
     mat4 transform = GetGlobalTransform();
-    // -Z column
     return vec3{-transform.columns[2].x, -transform.columns[2].y, -transform.columns[2].z}.Normalized();
 }
 
