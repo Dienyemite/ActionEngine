@@ -284,18 +284,23 @@ void Node::Reparent(Node* new_parent) {
 
 void Node::EnterTree(SceneTree* tree) {
     if (m_inside_tree) return;
-    
+
     m_tree = tree;
     m_inside_tree = true;
-    
+
+    // Register this node in the tree's node registry for ID-based lookup.
+    // Without this, nodes added via AddChild() after SetRoot() would never
+    // appear in the registry and GetNodeByID() would fail for them.
+    tree->RegisterNode(this);
+
     // Register with groups
     for (const auto& group : m_groups) {
         tree->AddToGroup(group, this);
     }
-    
+
     // Call _Ready for this node
     _Ready();
-    
+
     // Propagate to children
     for (auto& child : m_children) {
         child->EnterTree(tree);
@@ -304,22 +309,25 @@ void Node::EnterTree(SceneTree* tree) {
 
 void Node::ExitTree() {
     if (!m_inside_tree) return;
-    
+
     // Exit children first (reverse order)
     for (auto it = m_children.rbegin(); it != m_children.rend(); ++it) {
         (*it)->ExitTree();
     }
-    
+
     // Call _ExitTree
     _ExitTree();
-    
-    // Unregister from groups
+
     if (m_tree) {
+        // Unregister from groups
         for (const auto& group : m_groups) {
             m_tree->RemoveFromGroup(group, this);
         }
+
+        // Unregister from node registry (symmetric with RegisterNode in EnterTree)
+        m_tree->UnregisterNode(this);
     }
-    
+
     m_inside_tree = false;
     m_tree = nullptr;
 }

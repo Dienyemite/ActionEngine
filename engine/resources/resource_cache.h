@@ -83,7 +83,7 @@ public:
 private:
     struct CacheEntry {
         Ref<Resource> resource;
-        float last_access_time = 0;
+        u64 last_access_order = 0;
         size_t memory_size = 0;
     };
     
@@ -97,7 +97,7 @@ private:
     std::unordered_map<ResourceID, std::string> m_path_by_id;
     
     size_t m_memory_usage = 0;
-    float m_current_time = 0;
+    mutable u64 m_access_counter = 0;  // Monotonic counter for LRU ordering
 };
 
 // Template implementations
