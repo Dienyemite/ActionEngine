@@ -31,55 +31,7 @@ Node::~Node() {
     // Children are automatically cleaned up via shared_ptr
 }
 
-Node::Node(Node&& other) noexcept
-    : m_id(other.m_id)
-    , m_name(std::move(other.m_name))
-    , m_parent(other.m_parent)
-    , m_children(std::move(other.m_children))
-    , m_tree(other.m_tree)
-    , m_inside_tree(other.m_inside_tree)
-    , m_process_mode(other.m_process_mode)
-    , m_visible(other.m_visible)
-    , m_editor_only(other.m_editor_only)
-    , m_groups(std::move(other.m_groups))
-    , m_signals(std::move(other.m_signals))
-{
-    other.m_id = INVALID_NODE_ID;
-    other.m_parent = nullptr;
-    other.m_tree = nullptr;
-    other.m_inside_tree = false;
-    
-    // Update children's parent pointer
-    for (auto& child : m_children) {
-        child->m_parent = this;
-    }
-}
-
-Node& Node::operator=(Node&& other) noexcept {
-    if (this != &other) {
-        m_id = other.m_id;
-        m_name = std::move(other.m_name);
-        m_parent = other.m_parent;
-        m_children = std::move(other.m_children);
-        m_tree = other.m_tree;
-        m_inside_tree = other.m_inside_tree;
-        m_process_mode = other.m_process_mode;
-        m_visible = other.m_visible;
-        m_editor_only = other.m_editor_only;
-        m_groups = std::move(other.m_groups);
-        m_signals = std::move(other.m_signals);
-        
-        other.m_id = INVALID_NODE_ID;
-        other.m_parent = nullptr;
-        other.m_tree = nullptr;
-        other.m_inside_tree = false;
-        
-        for (auto& child : m_children) {
-            child->m_parent = this;
-        }
-    }
-    return *this;
-}
+// Move operations are deleted in node.h (see comment there for rationale).
 
 // ===== Child Management =====
 
@@ -289,8 +241,6 @@ void Node::EnterTree(SceneTree* tree) {
     m_inside_tree = true;
 
     // Register this node in the tree's node registry for ID-based lookup.
-    // Without this, nodes added via AddChild() after SetRoot() would never
-    // appear in the registry and GetNodeByID() would fail for them.
     tree->RegisterNode(this);
 
     // Register with groups
@@ -298,13 +248,15 @@ void Node::EnterTree(SceneTree* tree) {
         tree->AddToGroup(group, this);
     }
 
-    // Call _Ready for this node
-    _Ready();
-
-    // Propagate to children
+    // Propagate to children FIRST so that children are fully initialised
+    // before the parent's _Ready() runs.  This matches Godot's bottom-up
+    // _ready() ordering: a parent can safely query its children in _Ready().
     for (auto& child : m_children) {
         child->EnterTree(tree);
     }
+
+    // Call _Ready AFTER all children are ready.
+    _Ready();
 }
 
 void Node::ExitTree() {

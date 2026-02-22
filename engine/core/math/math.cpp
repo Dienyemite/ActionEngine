@@ -1,4 +1,5 @@
 #include "math.h"
+#include "../logging.h"
 
 namespace action {
 
@@ -187,6 +188,10 @@ mat4 mat4::inverse() const {
         for (int i = 0; i < 16; ++i) {
             (&result.columns[0].x)[i] = inv[i] * inv_det;
         }
+    } else {
+        // Singular matrix: cannot be inverted.  Log a warning and return identity
+        // so callers receive a safe fallback rather than garbled transform data.
+        LOG_WARN("mat4::inverse(): matrix is singular (|det| = {:.6f}), returning identity", std::abs(det));
     }
     
     return result;

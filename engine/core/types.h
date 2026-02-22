@@ -242,6 +242,28 @@ struct Frustum {
     bool intersects(const Sphere& sphere) const;
 };
 
+// ===== Entity Component System Entity Handle =====
+//
+// Entity encoding: lower 20 bits = unique index, upper 12 bits = generation counter.
+// Generations prevent stale-handle aliasing after an entity is destroyed and its
+// index is recycled.  An old handle with generation N will not match a live entity
+// at the same index with generation N+1.
+//
+//   bits 31-20: generation (12 bits, wraps at 4096)
+//   bits 19-0:  index      (20 bits, max ~1M simultaneous entities)
+using Entity = u32;
+constexpr Entity INVALID_ENTITY = UINT32_MAX;
+
+static constexpr u32 ENTITY_INDEX_BITS      = 20;
+static constexpr u32 ENTITY_GENERATION_BITS = 12;
+static constexpr u32 ENTITY_INDEX_MASK      = (1u << ENTITY_INDEX_BITS) - 1;       // 0x000FFFFF
+static constexpr u32 ENTITY_GENERATION_MASK = ~ENTITY_INDEX_MASK;                  // 0xFFF00000
+
+inline u32    EntityIndex     (Entity e)                        { return e & ENTITY_INDEX_MASK; }
+inline u32    EntityGeneration(Entity e)                        { return e >> ENTITY_INDEX_BITS; }
+inline Entity MakeEntity      (u32 index, u32 generation)       { return index | (generation << ENTITY_INDEX_BITS); }
+constexpr u32 MAX_ENTITIES = (1u << ENTITY_INDEX_BITS);  // 1,048,576 max simultaneous entities
+
 // Handle types for resources
 template<typename T>
 struct Handle {

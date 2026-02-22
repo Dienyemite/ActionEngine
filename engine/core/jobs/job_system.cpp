@@ -165,8 +165,10 @@ JobHandle JobSystem::ParallelFor(u32 count, std::function<void(u32, u32)> func,
         u32 end = std::min(start + batch_size, count);
         
         Job job{
-            .function = [func, start, end]() {
-                u32 tid = 0; // Will be set properly in worker
+            .function = [this, func, start, end]() {
+                // GetCurrentThreadId() inspects the calling thread's std::thread::id,
+                // giving the correct worker thread index instead of a hard-coded 0.
+                u32 tid = GetCurrentThreadId();
                 for (u32 i = start; i < end; ++i) {
                     func(i, tid);
                 }

@@ -115,13 +115,10 @@ void* HeapAllocator::Allocate(size_t size, size_t alignment) {
     void* ptr = ALIGNED_ALLOC(alignment, AlignUp(size, alignment));
     
     if (ptr) {
+        std::lock_guard lock(m_mutex);
+        m_allocations[ptr] = size;
         m_allocated_size += size;
         m_allocation_count++;
-        
-#ifdef _DEBUG
-        std::lock_guard lock(m_debug_mutex);
-        m_allocations[ptr] = size;
-#endif
     }
     
     return ptr;
@@ -130,9 +127,8 @@ void* HeapAllocator::Allocate(size_t size, size_t alignment) {
 void HeapAllocator::Free(void* ptr) {
     if (!ptr) return;
     
-#ifdef _DEBUG
     {
-        std::lock_guard lock(m_debug_mutex);
+        std::lock_guard lock(m_mutex);
         auto it = m_allocations.find(ptr);
         if (it != m_allocations.end()) {
             m_allocated_size -= it->second;
@@ -142,17 +138,12 @@ void HeapAllocator::Free(void* ptr) {
             LOG_ERROR("HeapAllocator::Free called with unknown pointer");
         }
     }
-#else
-    m_allocation_count--;
-    // Note: Can't track exact size without header in release mode
-#endif
     
     ALIGNED_FREE(ptr);
 }
 
 void HeapAllocator::Reset() {
-#ifdef _DEBUG
-    std::lock_guard lock(m_debug_mutex);
+    std::lock_guard lock(m_mutex);
     
     if (!m_allocations.empty()) {
         LOG_WARN("HeapAllocator::Reset - freeing {} leaked allocations:", m_allocations.size());
@@ -162,7 +153,6 @@ void HeapAllocator::Reset() {
         }
         m_allocations.clear();
     }
-#endif
     
     m_allocated_size = 0;
     m_allocation_count = 0;

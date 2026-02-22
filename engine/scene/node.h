@@ -63,9 +63,12 @@ public:
     Node(const Node&) = delete;
     Node& operator=(const Node&) = delete;
     
-    // Move semantics
-    Node(Node&& other) noexcept;
-    Node& operator=(Node&& other) noexcept;
+    // Moving a class derived from enable_shared_from_this doesn't update the
+    // internal weak_ptr, so shared_from_this() on the moved-to object would
+    // return a dangling or invalid pointer.  Nodes are always owned via
+    // shared_ptr -- there is no legitimate use-case for moving them.
+    Node(Node&&) = delete;
+    Node& operator=(Node&&) = delete;
     
     // ===== Identification =====
     NodeID GetID() const { return m_id; }
