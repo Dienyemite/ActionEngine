@@ -12,9 +12,9 @@ bool ECS::Initialize() {
 void ECS::Shutdown() {
     m_systems.clear();
     m_pools.clear();
-    m_entities.clear();
     m_free_list.clear();
-    m_alive.clear();
+    m_generations.clear();
+    m_next_index = 0;
     
     LOG_INFO("ECS shutdown");
 }
@@ -30,40 +30,51 @@ void ECS::Update(float dt) {
 }
 
 Entity ECS::CreateEntity() {
-    Entity entity;
-    
+    u32 index;
+    u32 generation;
+
     if (!m_free_list.empty()) {
-        entity = m_free_list.back();
+        // Recycle an index. The generation was already incremented in DestroyEntity.
+        Entity recycled = m_free_list.back();
         m_free_list.pop_back();
-        m_alive[entity] = true;
+        index      = EntityIndex(recycled);
+        generation = EntityGeneration(recycled);   // already bumped
     } else {
-        entity = m_next_entity++;
-        m_entities.push_back(entity);
-        m_alive.push_back(true);
+        // Brand-new index slot
+        index      = m_next_index++;
+        generation = 0;
+        m_generations.push_back(0);
     }
-    
+
+    Entity entity = MakeEntity(index, generation);
     return entity;
 }
 
 void ECS::DestroyEntity(Entity entity) {
-    if (entity >= m_alive.size() || !m_alive[entity]) {
-        return;
-    }
-    
-    // Remove all components
+    if (!IsAlive(entity)) return;
+
+    // Remove all components from every pool
     for (auto& pool : m_pools) {
-        if (pool) {
-            pool->Remove(entity);
-        }
+        if (pool) pool->Remove(entity);
     }
-    
-    m_alive[entity] = false;
-    m_free_list.push_back(entity);
+
+    // Increment the generation for this index, invalidating any surviving copies
+    // of the old handle.  Wrap within ENTITY_GENERATION_BITS bits.
+    u32 index = EntityIndex(entity);
+    u32 next_gen = (EntityGeneration(entity) + 1) & ((1u << ENTITY_GENERATION_BITS) - 1);
+    m_generations[index] = next_gen;
+
+    // Push the NEXT-generation handle onto the free list so CreateEntity issues
+    // the correct generation when this index is reused.
+    m_free_list.push_back(MakeEntity(index, next_gen));
 }
 
 bool ECS::IsAlive(Entity entity) const {
-    if (entity >= m_alive.size()) return false;
-    return m_alive[entity];
+    if (entity == INVALID_ENTITY) return false;
+    u32 index = EntityIndex(entity);
+    if (index >= m_generations.size()) return false;
+    // Entity is live iff its generation matches the current generation for that index
+    return EntityGeneration(entity) == m_generations[index];
 }
 
 vec3 ECS::GetPlayerPosition() const {

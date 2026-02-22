@@ -36,16 +36,15 @@ private:
     static inline std::atomic<u32> s_next_id{0};
 };
 
-// Entity is just an ID
-using Entity = u32;
-constexpr Entity INVALID_ENTITY = UINT32_MAX;
-
 // Component storage base
 class IComponentPool {
 public:
     virtual ~IComponentPool() = default;
     virtual void Remove(Entity entity) = 0;
     virtual bool Has(Entity entity) const = 0;
+    // Exposed for ForEach smallest-pool selection and entity iteration
+    virtual u32 Size() const = 0;
+    virtual const std::vector<Entity>& GetEntities() const = 0;
 };
 
 // Typed component pool
@@ -81,9 +80,9 @@ public:
     auto begin() { return m_data.GetComponents().begin(); }
     auto end() { return m_data.GetComponents().end(); }
     
-    const std::vector<Entity>& GetEntities() const { return m_data.GetDense(); }
+    const std::vector<Entity>& GetEntities() const override { return m_data.GetDense(); }
     std::span<T> GetComponents() { return m_data.GetComponents(); }
-    u32 Size() const { return m_data.Size(); }
+    u32 Size() const override { return m_data.Size(); }
     
 private:
     TypedSparseSet<T> m_data;
@@ -159,17 +158,45 @@ public:
         return false;
     }
     
-    // Iteration over entities with specific components
-    // Uses template functor instead of std::function to avoid heap allocation
+    // Iteration over entities with specific components.
+    // Fixes:
+    //   #11 - Iterates the smallest pool (not blindly the first template arg)
+    //   #12 - Gets each pool pointer once before the loop (no per-entity double-lookups)
     template<typename... Components, typename Func>
     void ForEach(Func&& func) {
-        // Get the smallest pool for iteration (reduces iterations)
-        auto* first_pool = GetPool<std::tuple_element_t<0, std::tuple<Components...>>>();
-        if (!first_pool) return;
-        
-        for (Entity entity : first_pool->GetEntities()) {
-            if ((HasComponent<Components>(entity) && ...)) {
-                func(entity, *GetComponent<Components>(entity)...);
+        // --- Collect typed pool pointers once up front ---
+        auto pools = std::make_tuple(GetPool<Components>()...);
+
+        // Early-exit: if any pool is missing, no entities can have all components
+        bool all_exist = std::apply([](auto*... p) { return ((p != nullptr) && ...); }, pools);
+        if (!all_exist) return;
+
+        // Find the pool with the fewest entities to minimise outer-loop iterations
+        IComponentPool* smallest = nullptr;
+        u32 smallest_size = UINT32_MAX;
+        std::apply([&](auto*... p) {
+            // Fold over all pools; comma operator discards results
+            (void)std::initializer_list<int>{
+                (p->Size() < smallest_size ? (smallest_size = p->Size(), smallest = p, 0) : 0)...
+            };
+        }, pools);
+
+        if (smallest_size == 0) return;
+
+        // Iterate entities from the smallest pool.
+        // For each entity, do a SINGLE pool lookup per component (fixes double-lookup #12).
+        for (Entity entity : smallest->GetEntities()) {
+            // Get all component pointers in one tuple expansion (one Get() per pool)
+            auto comp_ptrs = std::apply(
+                [entity](auto*... p) { return std::make_tuple(p->Get(entity)...); }, pools);
+
+            // Check all are non-null (entity has all required components)
+            bool all_have = std::apply(
+                [](auto*... ptrs) { return ((ptrs != nullptr) && ...); }, comp_ptrs);
+
+            if (all_have) {
+                std::apply(
+                    [&func, entity](auto*... ptrs) { func(entity, *ptrs...); }, comp_ptrs);
             }
         }
     }
@@ -220,11 +247,13 @@ private:
         return static_cast<ComponentPool<T>*>(m_pools[id].get());
     }
     
-    // Entity storage
-    std::vector<Entity> m_entities;
-    std::vector<Entity> m_free_list;
-    std::vector<u8> m_alive;  // u8 instead of bool for cache efficiency
-    Entity m_next_entity = 0;
+    // Entity storage — generation-packed handles.
+    // m_generations[index] holds the CURRENT generation for that index slot.
+    // A live entity must satisfy: EntityGeneration(e) == m_generations[EntityIndex(e)]
+    // An entity is dead when its generation has been incremented by DestroyEntity.
+    std::vector<Entity> m_free_list;   // recycled indices (stored as full entity handles)
+    std::vector<u32>    m_generations; // per-index generation counter
+    u32 m_next_index = 0;              // monotonically-increasing index counter
     
     // Component pools - vector indexed by compile-time type ID (faster than unordered_map)
     std::vector<std::unique_ptr<IComponentPool>> m_pools;

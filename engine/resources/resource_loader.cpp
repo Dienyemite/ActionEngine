@@ -40,22 +40,63 @@ void ResourceLoader::RegisterLoader(const std::vector<std::string>& extensions, 
 }
 
 Ref<Resource> ResourceLoader::Load(const std::string& path) {
-    // Check cache first
+    // Fast path: check cache without taking the load mutex.
+    // ResourceCache::Get() is thread-safe (has its own internal mutex).
     if (m_config.use_cache && m_cache) {
-        Ref<Resource> cached = m_cache->Get(path);
-        if (cached) {
+        if (Ref<Resource> cached = m_cache->Get(path)) {
             return cached;
         }
     }
-    
-    // Load from disk
+
+    // -----------------------------------------------------------------------
+    // TOCTOU-safe serialization for concurrent loads of the same path.
+    //
+    // Without this block, two threads can both miss the cache check above,
+    // both call LoadInternal(), and end up with two distinct Resource objects
+    // for the same file -- only one of which gets cached.
+    // -----------------------------------------------------------------------
+    {
+        std::unique_lock<std::mutex> lock(m_load_mutex);
+
+        // Double-check cache while holding the load mutex so we don't race with
+        // a thread that just finished loading and added to the cache.
+        if (m_config.use_cache && m_cache) {
+            if (Ref<Resource> cached = m_cache->Get(path)) {
+                return cached;
+            }
+        }
+
+        // If another thread is already loading this path, wait for it to finish
+        // (cv.wait releases the lock while waiting, allowing other paths to proceed).
+        m_load_cv.wait(lock, [&] { return m_loading_paths.count(path) == 0; });
+
+        // Re-check cache: the thread we were waiting for may have just added it.
+        if (m_config.use_cache && m_cache) {
+            if (Ref<Resource> cached = m_cache->Get(path)) {
+                return cached;
+            }
+        }
+
+        // We are the first thread to load this path -- mark it as in-flight.
+        m_loading_paths.insert(path);
+    }  // Release lock before the (potentially slow) disk read
+
+    // --- Load from disk (without holding the mutex) ---
     Ref<Resource> resource = LoadInternal(path);
-    
-    // Add to cache
-    if (resource && m_config.use_cache && m_cache) {
-        m_cache->Add(resource);
+
+    // --- Add to cache and unmark the in-flight path ---
+    {
+        std::lock_guard<std::mutex> lock(m_load_mutex);
+
+        if (resource && m_config.use_cache && m_cache) {
+            m_cache->Add(resource);
+        }
+
+        m_loading_paths.erase(path);
     }
-    
+    // Wake up any threads waiting on this path.
+    m_load_cv.notify_all();
+
     return resource;
 }
 

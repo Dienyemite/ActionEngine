@@ -2,6 +2,8 @@
 
 #include "../types.h"
 #include <atomic>
+#include <mutex>
+#include <unordered_map>
 #include <new>
 
 namespace action {
@@ -101,6 +103,15 @@ public:
         : m_capacity(count)
         , m_allocated(0) 
     {
+        // Guard against count == 0: `count - 1` would underflow to SIZE_MAX,
+        // causing a loop that writes past all memory.
+        if (count == 0) {
+            m_memory    = nullptr;
+            m_free_list = nullptr;
+            m_block_size = 0;
+            return;
+        }
+
         // Ensure alignment
         size_t block_size = AlignUp(sizeof(T), alignof(T));
         block_size = std::max(block_size, sizeof(FreeNode));
@@ -120,7 +131,9 @@ public:
     }
     
     ~PoolAllocator() {
-        ::operator delete(m_memory, std::align_val_t{alignof(T)});
+        if (m_memory) {
+            ::operator delete(m_memory, std::align_val_t{alignof(T)});
+        }
     }
     
     void* Allocate(size_t size, size_t alignment = DEFAULT_ALIGNMENT) override {
@@ -147,6 +160,10 @@ public:
     }
     
     void Reset() override {
+        if (m_capacity == 0 || !m_memory) {
+            m_allocated = 0;
+            return;
+        }
         // Rebuild free list (doesn't call destructors!)
         m_free_list = reinterpret_cast<FreeNode*>(m_memory);
         FreeNode* current = m_free_list;
@@ -234,10 +251,12 @@ private:
     std::atomic<size_t> m_allocated_size{0};
     std::atomic<size_t> m_allocation_count{0};
     
-#ifdef _DEBUG
-    std::mutex m_debug_mutex;
+    // Allocation map used for size tracking in both Debug and Release.
+    // Required because ALIGNED_FREE has no way to recover the original size
+    // without a stored header (which would complicate alignment guarantees).
+    // HeapAllocator is not a hot-path allocator, so the mutex overhead is acceptable.
+    std::mutex m_mutex;
     std::unordered_map<void*, size_t> m_allocations;
-#endif
 };
 
 /*
