@@ -33,9 +33,10 @@ struct LightingUBO {
 
 struct PushConstants {
     mat4 model;
-    mat4 normalMatrix;
     vec4 color;
 };
+// Note: normalMatrix removed (#24) — the vertex shader computes it from push.model at no
+// extra cost and this keeps push constants at 80 bytes (was 144).
 
 mat4 Camera::GetViewMatrix() const {
     return mat4::look_at(position, position + forward, up);
@@ -224,13 +225,9 @@ void Renderer::Shutdown() {
     
     // Destroy uniform buffers
     for (auto& ub : m_uniform_buffers) {
-        if (ub.camera_buffer != VK_NULL_HANDLE) {
-            vkDestroyBuffer(device, ub.camera_buffer, nullptr);
-            vkFreeMemory(device, ub.camera_memory, nullptr);
-        }
-        if (ub.lighting_buffer != VK_NULL_HANDLE) {
-            vkDestroyBuffer(device, ub.lighting_buffer, nullptr);
-            vkFreeMemory(device, ub.lighting_memory, nullptr);
+        if (ub.combined_buffer != VK_NULL_HANDLE) {
+            vkDestroyBuffer(device, ub.combined_buffer, nullptr);
+            vkFreeMemory(device, ub.combined_memory, nullptr);
         }
     }
     
@@ -539,8 +536,8 @@ bool Renderer::CreateRenderPasses() {
     VkSubpassDependency fxaa_dependency{};
     fxaa_dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     fxaa_dependency.dstSubpass = 0;
-    fxaa_dependency.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    fxaa_dependency.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    fxaa_dependency.srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;  // #25: was FRAGMENT_SHADER_BIT
+    fxaa_dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;            // #25: was SHADER_READ_BIT
     fxaa_dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     fxaa_dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     
@@ -777,91 +774,89 @@ bool Renderer::CreateDescriptorSets() {
 
 bool Renderer::CreateUniformBuffers() {
     VkDevice device = m_context.GetDevice();
-    VkDeviceSize camera_size = sizeof(CameraUBO);
+    VkDeviceSize camera_size   = sizeof(CameraUBO);
     VkDeviceSize lighting_size = sizeof(LightingUBO);
-    
+
+    // Query the minimum uniform buffer offset alignment so we can suballocate
+    // camera and lighting data from a single VkDeviceMemory (#23).
+    VkPhysicalDeviceProperties phys_props;
+    vkGetPhysicalDeviceProperties(m_context.GetPhysicalDevice(), &phys_props);
+    VkDeviceSize alignment = phys_props.limits.minUniformBufferOffsetAlignment;
+
+    // Round camera region up to alignment boundary
+    auto align_up = [](VkDeviceSize v, VkDeviceSize a) -> VkDeviceSize {
+        return (v + a - 1) & ~(a - 1);
+    };
+    VkDeviceSize camera_aligned = align_up(camera_size, alignment);
+    VkDeviceSize combined_size  = camera_aligned + lighting_size;
+
     for (u32 i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        // Camera buffer
+        // Single buffer for both UBOs
         VkBufferCreateInfo buffer_info{};
-        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        buffer_info.size = camera_size;
-        buffer_info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        buffer_info.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        buffer_info.size        = combined_size;
+        buffer_info.usage       = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
         buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        
-        if (vkCreateBuffer(device, &buffer_info, nullptr, &m_uniform_buffers[i].camera_buffer) != VK_SUCCESS) {
-            LOG_ERROR("Failed to create camera uniform buffer");
+
+        if (vkCreateBuffer(device, &buffer_info, nullptr, &m_uniform_buffers[i].combined_buffer) != VK_SUCCESS) {
+            LOG_ERROR("Failed to create combined uniform buffer");
             return false;
         }
-        
+
         VkMemoryRequirements mem_req;
-        vkGetBufferMemoryRequirements(device, m_uniform_buffers[i].camera_buffer, &mem_req);
-        
+        vkGetBufferMemoryRequirements(device, m_uniform_buffers[i].combined_buffer, &mem_req);
+
         VkMemoryAllocateInfo alloc_info{};
-        alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        alloc_info.allocationSize = mem_req.size;
-        alloc_info.memoryTypeIndex = m_context.FindMemoryType(mem_req.memoryTypeBits, 
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        
-        if (vkAllocateMemory(device, &alloc_info, nullptr, &m_uniform_buffers[i].camera_memory) != VK_SUCCESS) {
-            LOG_ERROR("Failed to allocate camera uniform memory");
-            return false;
-        }
-        
-        vkBindBufferMemory(device, m_uniform_buffers[i].camera_buffer, m_uniform_buffers[i].camera_memory, 0);
-        vkMapMemory(device, m_uniform_buffers[i].camera_memory, 0, camera_size, 0, &m_uniform_buffers[i].camera_mapped);
-        
-        // Lighting buffer
-        buffer_info.size = lighting_size;
-        
-        if (vkCreateBuffer(device, &buffer_info, nullptr, &m_uniform_buffers[i].lighting_buffer) != VK_SUCCESS) {
-            LOG_ERROR("Failed to create lighting uniform buffer");
-            return false;
-        }
-        
-        vkGetBufferMemoryRequirements(device, m_uniform_buffers[i].lighting_buffer, &mem_req);
-        alloc_info.allocationSize = mem_req.size;
+        alloc_info.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        alloc_info.allocationSize  = mem_req.size;
         alloc_info.memoryTypeIndex = m_context.FindMemoryType(mem_req.memoryTypeBits,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        
-        if (vkAllocateMemory(device, &alloc_info, nullptr, &m_uniform_buffers[i].lighting_memory) != VK_SUCCESS) {
-            LOG_ERROR("Failed to allocate lighting uniform memory");
+
+        if (vkAllocateMemory(device, &alloc_info, nullptr, &m_uniform_buffers[i].combined_memory) != VK_SUCCESS) {
+            LOG_ERROR("Failed to allocate combined uniform memory");
             return false;
         }
-        
-        vkBindBufferMemory(device, m_uniform_buffers[i].lighting_buffer, m_uniform_buffers[i].lighting_memory, 0);
-        vkMapMemory(device, m_uniform_buffers[i].lighting_memory, 0, lighting_size, 0, &m_uniform_buffers[i].lighting_mapped);
-        
-        // Update descriptor sets
+
+        vkBindBufferMemory(device, m_uniform_buffers[i].combined_buffer, m_uniform_buffers[i].combined_memory, 0);
+
+        // Persistent whole-buffer mapping; slice into camera / lighting regions.
+        void* mapped = nullptr;
+        vkMapMemory(device, m_uniform_buffers[i].combined_memory, 0, combined_size, 0, &mapped);
+        m_uniform_buffers[i].camera_mapped   = mapped;
+        m_uniform_buffers[i].lighting_offset = camera_aligned;
+        m_uniform_buffers[i].lighting_mapped = static_cast<char*>(mapped) + camera_aligned;
+
+        // Update descriptor sets to reference the correct sub-ranges
         std::array<VkDescriptorBufferInfo, 2> buffer_infos{};
-        buffer_infos[0].buffer = m_uniform_buffers[i].camera_buffer;
+        buffer_infos[0].buffer = m_uniform_buffers[i].combined_buffer;
         buffer_infos[0].offset = 0;
-        buffer_infos[0].range = camera_size;
-        
-        buffer_infos[1].buffer = m_uniform_buffers[i].lighting_buffer;
-        buffer_infos[1].offset = 0;
-        buffer_infos[1].range = lighting_size;
-        
+        buffer_infos[0].range  = camera_size;
+
+        buffer_infos[1].buffer = m_uniform_buffers[i].combined_buffer;
+        buffer_infos[1].offset = camera_aligned;
+        buffer_infos[1].range  = lighting_size;
+
         std::array<VkWriteDescriptorSet, 2> writes{};
-        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet = m_global_descriptor_sets[i];
-        writes[0].dstBinding = 0;
+        writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet          = m_global_descriptor_sets[i];
+        writes[0].dstBinding      = 0;
         writes[0].dstArrayElement = 0;
-        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         writes[0].descriptorCount = 1;
-        writes[0].pBufferInfo = &buffer_infos[0];
-        
-        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet = m_global_descriptor_sets[i];
-        writes[1].dstBinding = 1;
+        writes[0].pBufferInfo     = &buffer_infos[0];
+
+        writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet          = m_global_descriptor_sets[i];
+        writes[1].dstBinding      = 1;
         writes[1].dstArrayElement = 0;
-        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         writes[1].descriptorCount = 1;
-        writes[1].pBufferInfo = &buffer_infos[1];
-        
+        writes[1].pBufferInfo     = &buffer_infos[1];
+
         vkUpdateDescriptorSets(device, static_cast<u32>(writes.size()), writes.data(), 0, nullptr);
     }
-    
-    LOG_INFO("Created uniform buffers");
+
+    LOG_INFO("Created combined uniform buffers (camera + lighting suballocated)");
     return true;
 }
 
@@ -1946,7 +1941,7 @@ void Renderer::RecordCommandBuffer(u32 image_index, const RenderList& render_lis
             // Set push constants for this object
             PushConstants push{};
             push.model = obj.transform;
-            push.normalMatrix = obj.transform;  // TODO: Proper normal matrix for non-uniform scale
+            // normalMatrix now computed in the vertex shader (#24)
             
             // Use object's color
             push.color = obj.color;
@@ -1967,9 +1962,8 @@ void Renderer::RecordCommandBuffer(u32 image_index, const RenderList& render_lis
             vkCmdBindIndexBuffer(cmd, m_test_index_buffer, 0, VK_INDEX_TYPE_UINT32);
             
             PushConstants push{};
-            push.model = mat4::identity();
-            push.normalMatrix = push.model;
-            push.color = vec4{0.8f, 0.6f, 0.4f, 1.0f};
+            push.model  = mat4::identity();
+            push.color  = vec4{0.8f, 0.6f, 0.4f, 1.0f};
             
             vkCmdPushConstants(cmd, m_pipeline_layout,
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,

@@ -164,13 +164,12 @@ void CharacterController::UpdateGroundState(CharacterControllerComponent& contro
                                               const vec3& position) {
     const auto& config = controller.config;
     
-    // Cast down from slightly above capsule bottom
-    // The capsule's bottom is at position.y (since center is at position + height/2)
-    // We cast from slightly above the feet to detect ground contact
+    // Cast a sphere (matching character radius) straight down to detect ground contact.
+    // A single-ray check misses ledge edges; a sphere cast covers the full foot radius (#37).
     vec3 ray_origin = position + vec3{0, 0.1f, 0};
     float ray_dist = config.ground_check_distance + 0.15f;  // Check further down
-    
-    RaycastHit hit = m_world->Raycast(ray_origin, {0, -1, 0}, ray_dist, config.mask);
+
+    SweepHit hit = m_world->SphereCast(ray_origin, config.radius, {0, -1, 0}, ray_dist, config.mask);
     
     if (hit) {
         controller.ground.grounded = true;

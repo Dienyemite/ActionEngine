@@ -227,7 +227,16 @@ void JoltPhysics::Update(float dt) {
     
     // Fixed timestep accumulator
     m_accumulator += dt;
-    
+
+    // Spiral-of-death guard: clamp to 8 sub-steps so a long hitch doesn't
+    // cause hundreds of physics steps in a single frame (#34)
+    static constexpr float MAX_ACCUMULATED_TIME = FIXED_TIMESTEP * 8.0f;
+    if (m_accumulator > MAX_ACCUMULATED_TIME) {
+        LOG_WARN("[JoltPhysics] Accumulator clamped ({:.3f}s > {:.3f}s); physics will slow down",
+                 m_accumulator, MAX_ACCUMULATED_TIME);
+        m_accumulator = MAX_ACCUMULATED_TIME;
+    }
+
     while (m_accumulator >= FIXED_TIMESTEP) {
         // Step the physics simulation
         m_physics_system->Update(
@@ -581,13 +590,13 @@ std::vector<JoltRaycastHit> JoltPhysics::RaycastAll(const vec3& origin, const ve
                                                      float max_distance) {
     std::vector<JoltRaycastHit> results;
     if (!m_physics_system) return results;
-    
-    JPH::RayCast ray(ToJolt(origin), ToJolt(direction.normalized() * max_distance));
-    
-    // Collector for all hits
-    JPH::AllHitCollisionCollector<JPH::RayCastBodyCollector> collector;
-    m_physics_system->GetBroadPhaseQuery().CastRay(ray, collector);
-    
+
+    // Use NarrowPhaseQuery so we get actual shape hits, not just AABB broadphase hits (#35)
+    JPH::RRayCast ray(ToJoltR(origin), ToJolt(direction.normalized() * max_distance));
+    JPH::AllHitCollisionCollector<JPH::CastRayCollector> collector;
+    JPH::RayCastSettings ray_settings;  // defaults: back-face culling off, treat convex as solid
+    m_physics_system->GetNarrowPhaseQuery().CastRay(ray, ray_settings, collector);
+
     for (const auto& hit : collector.mHits) {
         JoltRaycastHit result;
         result.hit = true;
@@ -595,15 +604,23 @@ std::vector<JoltRaycastHit> JoltPhysics::RaycastAll(const vec3& origin, const ve
         result.point = origin + direction.normalized() * result.distance;
         result.body_id = hit.mBodyID;
         result.entity = GetEntity(hit.mBodyID);
+
+        // Get surface normal at the hit point (same as single Raycast)
+        JPH::BodyLockRead lock(m_physics_system->GetBodyLockInterface(), hit.mBodyID);
+        if (lock.Succeeded()) {
+            const JPH::Body& body = lock.GetBody();
+            result.normal = FromJolt(body.GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, ToJoltR(result.point)));
+        }
+
         results.push_back(result);
     }
-    
+
     // Sort by distance
     std::sort(results.begin(), results.end(), 
               [](const JoltRaycastHit& a, const JoltRaycastHit& b) {
                   return a.distance < b.distance;
               });
-    
+
     return results;
 }
 
@@ -611,26 +628,29 @@ std::vector<Entity> JoltPhysics::OverlapSphere(const vec3& center, float radius,
                                                 JPH::ObjectLayer layer_filter) {
     std::vector<Entity> results;
     if (!m_physics_system) return results;
-    
-    // Create sphere shape for query
-    JPH::SphereShape sphere(radius);
-    
-    // Collector for overlapping bodies
-    JPH::AllHitCollisionCollector<JPH::CollideShapeBodyCollector> collector;
-    
-    m_physics_system->GetBroadPhaseQuery().CollideAABox(
-        JPH::AABox(ToJolt(center - vec3{radius, radius, radius}), 
-                   ToJolt(center + vec3{radius, radius, radius})),
-        collector
-    );
-    
-    for (const auto& body_id : collector.mHits) {
-        Entity entity = GetEntity(body_id);
+
+    // Use NarrowPhaseQuery with the actual sphere shape for correct overlap tests (#36).
+    // The previous implementation created a SphereShape but then discarded it and used
+    // a broadphase AABB test instead, producing false positives.
+    JPH::RefConst<JPH::Shape> sphere_shape = new JPH::SphereShape(radius);
+
+    JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
+    JPH::CollideShapeSettings settings;
+    m_physics_system->GetNarrowPhaseQuery().CollideShape(
+        sphere_shape,
+        JPH::Vec3::sReplicate(1.0f),                            // uniform scale = 1
+        JPH::Mat44::sTranslation(ToJolt(center)),               // sphere center
+        settings,
+        ToJoltR(center),
+        collector);
+
+    for (const auto& hit : collector.mHits) {
+        Entity entity = GetEntity(hit.mBodyID2);  // CollideShapeResult uses mBodyID2
         if (entity != INVALID_ENTITY) {
             results.push_back(entity);
         }
     }
-    
+
     return results;
 }
 

@@ -14,6 +14,7 @@ void ECS::Shutdown() {
     m_pools.clear();
     m_free_list.clear();
     m_generations.clear();
+    m_component_masks.clear();
     m_next_index = 0;
     
     LOG_INFO("ECS shutdown");
@@ -46,6 +47,10 @@ Entity ECS::CreateEntity() {
         m_generations.push_back(0);
     }
 
+    // Ensure mask slot exists and is clean (#39)
+    if (index >= m_component_masks.size()) m_component_masks.resize(index + 1, 0);
+    m_component_masks[index] = 0;
+
     Entity entity = MakeEntity(index, generation);
     return entity;
 }
@@ -53,14 +58,22 @@ Entity ECS::CreateEntity() {
 void ECS::DestroyEntity(Entity entity) {
     if (!IsAlive(entity)) return;
 
-    // Remove all components from every pool
-    for (auto& pool : m_pools) {
-        if (pool) pool->Remove(entity);
+    // Remove components from pools — use the bitmask to skip pools the entity
+    // was never added to, making this O(K) rather than O(all_pools) (#39).
+    u32 index = EntityIndex(entity);
+    u64 mask = (index < m_component_masks.size()) ? m_component_masks[index] : 0;
+    if (index < m_component_masks.size()) m_component_masks[index] = 0;
+
+    for (u32 id = 0; id < m_pools.size(); ++id) {
+        if (!m_pools[id]) continue;
+        // Pools with id < 64 are tracked; skip if bit not set.
+        // Pools with id >= 64 are always checked (uncommon, no coverage in mask).
+        bool might_have = (id >= 64) || ((mask >> id) & 1ull);
+        if (might_have) m_pools[id]->Remove(entity);
     }
 
     // Increment the generation for this index, invalidating any surviving copies
     // of the old handle.  Wrap within ENTITY_GENERATION_BITS bits.
-    u32 index = EntityIndex(entity);
     u32 next_gen = (EntityGeneration(entity) + 1) & ((1u << ENTITY_GENERATION_BITS) - 1);
     m_generations[index] = next_gen;
 

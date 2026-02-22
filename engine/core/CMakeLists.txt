@@ -22,7 +22,8 @@ target_include_directories(EngineCore PUBLIC
 )
 
 if(MSVC)
-    target_compile_options(EngineCore PRIVATE /W4 /WX /arch:SSE2)
+    # /Zc:preprocessor enables conformant C++20 preprocessor required for __VA_OPT__ (#29)
+    target_compile_options(EngineCore PRIVATE /W4 /WX /Zc:preprocessor)
 else()
     target_compile_options(EngineCore PRIVATE -Wall -Wextra -Werror -msse2)
 endif()

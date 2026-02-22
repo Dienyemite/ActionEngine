@@ -26,7 +26,6 @@ layout(set = 0, binding = 0) uniform CameraUBO {
 
 layout(push_constant) uniform PushConstants {
     mat4 model;
-    mat4 normalMatrix;
     vec4 color;  // passed to fragment shader via push constants
 } push;
 
@@ -34,7 +33,9 @@ void main() {
     vec4 worldPos = push.model * vec4(inPosition, 1.0);
     
     fragWorldPos = worldPos.xyz;
-    fragNormal = mat3(push.normalMatrix) * inNormal;
+    // Compute normalMatrix in the shader to keep push constants at 80 bytes (#24)
+    mat3 normalMatrix = transpose(inverse(mat3(push.model)));
+    fragNormal = normalMatrix * inNormal;
     fragTexCoord = inTexCoord;
     
     gl_Position = camera.viewProjection * worldPos;

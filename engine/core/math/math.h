@@ -33,6 +33,8 @@ inline float Lerp(float a, float b, float t) {
 }
 
 inline float SmoothStep(float edge0, float edge1, float x) {
+    // Guard against division by zero when edge0 == edge1 (#30)
+    if (std::abs(edge1 - edge0) < EPSILON) return x < edge0 ? 0.0f : 1.0f;
     float t = Clamp((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
     return t * t * (3.0f - 2.0f * t);
 }
@@ -78,9 +80,11 @@ inline float distance_sq(const vec3& a, const vec3& b) {
 
 // Quaternion implementations
 inline quat quat::from_axis_angle(const vec3& axis, float angle) {
+    // Normalize axis to guarantee a unit quaternion (#31)
+    vec3 n = axis.normalized();
     float half_angle = angle * 0.5f;
     float s = std::sin(half_angle);
-    return {axis.x * s, axis.y * s, axis.z * s, std::cos(half_angle)};
+    return {n.x * s, n.y * s, n.z * s, std::cos(half_angle)};
 }
 
 inline quat quat::from_euler(float pitch, float yaw, float roll) {

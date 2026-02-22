@@ -286,17 +286,34 @@ using TextureHandle = Handle<Texture>;
 using MaterialHandle = Handle<Material>;
 using ShaderHandle = Handle<Shader>;
 
-// Result type for error handling
+// Result type for error handling (#40)
+//
+// Plain `std::variant<T, E>` is ill-formed when T == E (e.g. Result<std::string>).
+// Wrapping in distinct tag types makes T and E always different variant members.
+template<typename T>
+struct OkResult  { T value; explicit OkResult(T v)  : value(std::move(v)) {} };
+template<typename E = std::string>
+struct ErrResult { E error; explicit ErrResult(E e) : error(std::move(e)) {} };
+
 template<typename T, typename E = std::string>
-using Result = std::variant<T, E>;
+using Result = std::variant<OkResult<T>, ErrResult<E>>;
 
-template<typename T, typename E>
-bool is_ok(const Result<T, E>& r) { return std::holds_alternative<T>(r); }
+template<typename T, typename E = std::string>
+bool is_ok(const Result<T, E>& r) { return std::holds_alternative<OkResult<T>>(r); }
 
-template<typename T, typename E>
-T& get_value(Result<T, E>& r) { return std::get<T>(r); }
+template<typename T, typename E = std::string>
+T& get_value(Result<T, E>& r) { return std::get<OkResult<T>>(r).value; }
 
-template<typename T, typename E>
-const E& get_error(const Result<T, E>& r) { return std::get<E>(r); }
+template<typename T, typename E = std::string>
+const T& get_value(const Result<T, E>& r) { return std::get<OkResult<T>>(r).value; }
+
+template<typename T, typename E = std::string>
+const E& get_error(const Result<T, E>& r) { return std::get<ErrResult<E>>(r).error; }
+
+// Factory helpers: Ok(value) / Err(message)
+template<typename T>
+OkResult<T> Ok(T v) { return OkResult<T>{std::move(v)}; }
+template<typename E = std::string>
+ErrResult<E> Err(E e) { return ErrResult<E>{std::move(e)}; }
 
 } // namespace action

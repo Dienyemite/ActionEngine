@@ -58,12 +58,13 @@ struct Capsule {
     
     // Get the line segment endpoints (centers of hemispheres)
     vec3 GetTop() const { 
-        float half_line = (height - 2.0f * radius) * 0.5f;
+        // Clamp to zero: if height < 2*radius the endpoints would invert (#32)
+        float half_line = std::max(0.0f, (height - 2.0f * radius) * 0.5f);
         return center + vec3{0, half_line, 0}; 
     }
     
     vec3 GetBottom() const { 
-        float half_line = (height - 2.0f * radius) * 0.5f;
+        float half_line = std::max(0.0f, (height - 2.0f * radius) * 0.5f);
         return center - vec3{0, half_line, 0}; 
     }
     

@@ -53,7 +53,7 @@ void Logger::LogInternal(LogLevel level, std::source_location loc, const std::st
                   tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec, (int)ms.count());
     
     // Console output with colors
-    if (m_colors_enabled) {
+    if (m_colors_enabled.load(std::memory_order_relaxed)) {
         std::cout << "\033[90m[" << timestamp << "]\033[0m "
                   << LevelToColor(level) << "[" << LevelToString(level) << "]\033[0m "
                   << "\033[90m[" << file << ":" << loc.line() << "]\033[0m "
@@ -71,7 +71,10 @@ void Logger::LogInternal(LogLevel level, std::source_location loc, const std::st
                << "[" << LevelToString(level) << "] "
                << "[" << file << ":" << loc.line() << "] "
                << message << "\n";
-        m_file.flush();
+        // Flush only on Warn and above to avoid expensive I/O on every log line (#27)
+        if (level >= LogLevel::Warn) {
+            m_file.flush();
+        }
     }
 }
 

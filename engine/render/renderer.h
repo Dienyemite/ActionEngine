@@ -251,15 +251,14 @@ private:
     VkDescriptorPool m_descriptor_pool = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_global_descriptor_sets;
     
-    // Uniform buffers (per frame in flight)
+    // Uniform buffers (per frame in flight) — camera + lighting suballocated from one
+    // VkDeviceMemory allocation to reduce vkAllocateMemory calls (#23).
     struct UniformBuffers {
-        VkBuffer camera_buffer = VK_NULL_HANDLE;
-        VkDeviceMemory camera_memory = VK_NULL_HANDLE;
-        void* camera_mapped = nullptr;
-        
-        VkBuffer lighting_buffer = VK_NULL_HANDLE;
-        VkDeviceMemory lighting_memory = VK_NULL_HANDLE;
-        void* lighting_mapped = nullptr;
+        VkBuffer combined_buffer = VK_NULL_HANDLE;   // Camera then Lighting data
+        VkDeviceMemory combined_memory = VK_NULL_HANDLE;
+        void* camera_mapped = nullptr;               // Points into persistent mapping
+        void* lighting_mapped = nullptr;             // = camera_mapped + lighting_offset
+        VkDeviceSize lighting_offset = 0;            // Aligned offset of Lighting region
     };
     std::array<UniformBuffers, MAX_FRAMES_IN_FLIGHT> m_uniform_buffers;
     

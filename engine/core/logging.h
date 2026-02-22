@@ -6,6 +6,7 @@
 #include <iostream>
 #include <fstream>
 #include <mutex>
+#include <atomic>
 #include <chrono>
 
 namespace action {
@@ -26,13 +27,13 @@ public:
         return instance;
     }
     
-    void SetLevel(LogLevel level) { m_min_level = level; }
+    void SetLevel(LogLevel level) { m_min_level.store(level, std::memory_order_relaxed); }
     void SetOutputFile(const std::string& path);
-    void EnableConsoleColors(bool enable) { m_colors_enabled = enable; }
+    void EnableConsoleColors(bool enable) { m_colors_enabled.store(enable, std::memory_order_relaxed); }
     
     template<typename... Args>
     void Log(LogLevel level, std::source_location loc, std::format_string<Args...> fmt, Args&&... args) {
-        if (level < m_min_level) return;
+        if (level < m_min_level.load(std::memory_order_relaxed)) return;
         
         std::string message = std::format(fmt, std::forward<Args>(args)...);
         LogInternal(level, loc, message);
@@ -45,11 +46,31 @@ private:
     const char* LevelToString(LogLevel level);
     const char* LevelToColor(LogLevel level);
     
-    LogLevel m_min_level = LogLevel::Info;
-    bool m_colors_enabled = true;
+    std::atomic<LogLevel> m_min_level{LogLevel::Info};   // #28: atomic to prevent data race
+    std::atomic<bool>     m_colors_enabled{true};        // #28: atomic to prevent data race
     std::mutex m_mutex;
     std::ofstream m_file;
 };
+
+// ===== Assertion helper (#29) =========================================================
+// Indirection through a template function avoids __VA_OPT__ + semicolon MSVC bug and
+// also eliminates the LOG_FATAL() zero-arg call UB that existed in the original code.
+namespace detail {
+    // Zero-extra-args overload: logs just the condition string.
+    inline void assert_fail(const char* cond, std::source_location loc) {
+        Logger::Get().Log(LogLevel::Fatal, loc, "Assertion failed: {}", cond);
+        std::abort();
+    }
+    // N-extra-args overload: forwards the caller-provided format+args.
+    // std::format_string<Args...> matches string literals at the call site (consteval).
+    template<typename... Args>
+    void assert_fail(const char* cond, std::source_location loc,
+                     std::format_string<Args...> fmt, Args&&... args) {
+        Logger::Get().Log(LogLevel::Fatal, loc, "Assertion failed: {}", cond);
+        Logger::Get().Log(LogLevel::Fatal, loc, fmt, std::forward<Args>(args)...);
+        std::abort();
+    }
+} // namespace detail
 
 // Convenience macros
 #define LOG_TRACE(...) ::action::Logger::Get().Log(::action::LogLevel::Trace, std::source_location::current(), __VA_ARGS__)
@@ -60,12 +81,15 @@ private:
 #define LOG_FATAL(...) ::action::Logger::Get().Log(::action::LogLevel::Fatal, std::source_location::current(), __VA_ARGS__)
 
 // Assertions
+// ENGINE_ASSERT(condition)            -- no message variant
+// ENGINE_ASSERT(condition, fmt, ...)  -- message + format variant
+// Uses detail::assert_fail to avoid MSVC __VA_OPT__+semicolon bug (#29).
+// __VA_OPT__(,) inserts a comma only when extra args are present; no semicolon
+// inside __VA_OPT__() so the MSVC C2059 bug is not triggered.
 #define ENGINE_ASSERT(condition, ...) \
     do { \
         if (!(condition)) { \
-            LOG_FATAL("Assertion failed: " #condition); \
-            LOG_FATAL(__VA_ARGS__); \
-            std::abort(); \
+            ::action::detail::assert_fail(#condition, std::source_location::current() __VA_OPT__(,) __VA_ARGS__); \
         } \
     } while (0)
 

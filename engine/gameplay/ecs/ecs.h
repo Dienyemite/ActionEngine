@@ -119,18 +119,37 @@ public:
     // Component management
     template<typename T>
     T& AddComponent(Entity entity, const T& component = T{}) {
-        return GetOrCreatePool<T>()->Add(entity, component);
+        const u32 id = TypeIDGenerator::GetID<T>();
+        auto* pool = GetOrCreatePool<T>();
+        T& result = pool->Add(entity, component);
+        // Track which pool this entity now has a component in (#39)
+        u32 idx = EntityIndex(entity);
+        if (idx >= m_component_masks.size()) m_component_masks.resize(idx + 1, 0);
+        if (id < 64) m_component_masks[idx] |= (1ull << id);
+        return result;
     }
     
     template<typename T, typename... Args>
     T& EmplaceComponent(Entity entity, Args&&... args) {
-        return GetOrCreatePool<T>()->Emplace(entity, std::forward<Args>(args)...);
+        const u32 id = TypeIDGenerator::GetID<T>();
+        auto* pool = GetOrCreatePool<T>();
+        T& result = pool->Emplace(entity, std::forward<Args>(args)...);
+        // Track which pool this entity now has a component in (#39)
+        u32 idx = EntityIndex(entity);
+        if (idx >= m_component_masks.size()) m_component_masks.resize(idx + 1, 0);
+        if (id < 64) m_component_masks[idx] |= (1ull << id);
+        return result;
     }
     
     template<typename T>
     void RemoveComponent(Entity entity) {
+        const u32 id = TypeIDGenerator::GetID<T>();
         if (auto* pool = GetPool<T>()) {
             pool->Remove(entity);
+            // Clear the tracked bit (#39)
+            u32 idx = EntityIndex(entity);
+            if (idx < m_component_masks.size() && id < 64)
+                m_component_masks[idx] &= ~(1ull << id);
         }
     }
     
@@ -251,9 +270,14 @@ private:
     // m_generations[index] holds the CURRENT generation for that index slot.
     // A live entity must satisfy: EntityGeneration(e) == m_generations[EntityIndex(e)]
     // An entity is dead when its generation has been incremented by DestroyEntity.
-    std::vector<Entity> m_free_list;   // recycled indices (stored as full entity handles)
-    std::vector<u32>    m_generations; // per-index generation counter
-    u32 m_next_index = 0;              // monotonically-increasing index counter
+    std::vector<Entity> m_free_list;       // recycled indices (stored as full entity handles)
+    std::vector<u32>    m_generations;     // per-index generation counter
+    u32 m_next_index = 0;                  // monotonically-increasing index counter
+
+    // Per-entity component presence bitmask (bits 0-63 correspond to pool IDs 0-63).
+    // Used by DestroyEntity to skip pools the entity was never added to, reducing
+    // O(all_pools) to O(components_on_entity) for the common case (#39).
+    std::vector<u64> m_component_masks;
     
     // Component pools - vector indexed by compile-time type ID (faster than unordered_map)
     std::vector<std::unique_ptr<IComponentPool>> m_pools;

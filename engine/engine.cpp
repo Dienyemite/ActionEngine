@@ -240,13 +240,13 @@ void Engine::Update(float dt) {
     // PLAY MODE: Third-person camera follows player
     // ========================================
     if (play_mode) {
-        // Third-person camera parameters (persistent state)
-        static float cam_distance = 8.0f;         // Distance behind player
-        static float cam_height = 3.0f;           // Height above player
-        static float cam_yaw = 0.0f;              // Horizontal angle (controlled by mouse)
-        static float cam_pitch = 0.3f;            // Vertical angle (controlled by mouse)
-        static float cam_sensitivity = 0.003f;
-        static vec3 smooth_target{0, 0, 0};       // Smoothed camera target
+        // Third-person camera parameters — stored as Engine members (#38)
+        float& cam_distance   = m_cam_distance;
+        float& cam_height     = m_cam_height;
+        float& cam_yaw        = m_cam_yaw;
+        float& cam_pitch      = m_cam_pitch;
+        float& cam_sensitivity = m_cam_sensitivity;
+        vec3&  smooth_target  = m_cam_smooth_target;
         
         // Mouse look (when right-click held, or always during play)
         if (input.IsKeyDown(Key::MouseRight)) {

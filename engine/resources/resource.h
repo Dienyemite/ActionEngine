@@ -53,10 +53,10 @@ public:
     static std::string GetStaticTypeName() { return "Resource"; }
     
     // ===== State =====
-    ResourceState GetState() const { return m_state; }
-    bool IsLoaded() const { return m_state == ResourceState::Loaded; }
-    bool IsLoading() const { return m_state == ResourceState::Loading; }
-    bool HasFailed() const { return m_state == ResourceState::Failed; }
+    ResourceState GetState() const  { return m_state.load(std::memory_order_acquire); }
+    bool IsLoaded()  const { return GetState() == ResourceState::Loaded; }
+    bool IsLoading() const { return GetState() == ResourceState::Loading; }
+    bool HasFailed() const { return GetState() == ResourceState::Failed; }
     
     // ===== Reference Counting =====
     // Lifetime is managed by shared_ptr (Ref<T>). Use shared_from_this() to
@@ -90,14 +90,14 @@ protected:
     friend class ResourceLoader;
     friend class ResourceCache;
     
-    void SetState(ResourceState state) { m_state = state; }
+    void SetState(ResourceState state) { m_state.store(state, std::memory_order_release); }
     
 private:
     static ResourceID s_next_id;
     
     ResourceID m_id = INVALID_RESOURCE_ID;
     std::string m_path;
-    ResourceState m_state = ResourceState::Unloaded;
+    std::atomic<ResourceState> m_state{ResourceState::Unloaded};  // #42: thread-safe state
     bool m_dirty = false;
     
     std::unordered_map<std::string, std::string> m_import_settings;

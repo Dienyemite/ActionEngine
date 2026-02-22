@@ -155,6 +155,15 @@ private:
     GameUpdateCallback m_game_update_callback;
     
     FrameStats m_frame_stats{};
+
+    // Play-mode third-person camera state — stored as members so they reset
+    // properly between Run() calls and are not invisible to future serialization (#38)
+    float m_cam_distance    = 8.0f;
+    float m_cam_height      = 3.0f;
+    float m_cam_yaw         = 0.0f;
+    float m_cam_pitch       = 0.3f;
+    float m_cam_sensitivity = 0.003f;
+    vec3  m_cam_smooth_target{0, 0, 0};
 };
 
 } // namespace action

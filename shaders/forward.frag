@@ -31,7 +31,6 @@ layout(set = 0, binding = 1) uniform LightingUBO {
 // Push constants include object color
 layout(push_constant) uniform PushConstants {
     mat4 model;
-    mat4 normalMatrix;
     vec4 color;
 } push;
 

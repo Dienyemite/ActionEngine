@@ -168,7 +168,7 @@ private:
     std::vector<CollisionEvent> m_collision_events;
     
     // Global settings
-    vec3 m_gravity{0, -20.0f, 0};  // Slightly higher than real gravity for snappy feel
+    vec3 m_gravity{0, -25.0f, 0};  // Matches JoltPhysicsConfig gravity for consistent feel (#33)
 };
 
 } // namespace action
