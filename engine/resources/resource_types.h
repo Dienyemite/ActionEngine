@@ -13,6 +13,11 @@ namespace action {
  */
 
 // ===== Texture Resource =====
+
+// Callback type used by the renderer to destroy its GPU-side objects.
+// Set via SetGPUReleaseCallback() when the renderer uploads GPU resources.
+using GPUReleaseFunc = std::function<void(void* handle)>;
+
 class TextureResource : public Resource {
 public:
     TextureResource() = default;
@@ -39,6 +44,10 @@ public:
     void* GetGPUHandle() const { return m_gpu_handle; }
     void SetGPUHandle(void* handle) { m_gpu_handle = handle; }
     
+    // Register a callback the renderer uses to destroy m_gpu_handle on Unload.
+    // Must be called by the renderer whenever it populates the GPU handle.
+    void SetGPUReleaseCallback(GPUReleaseFunc func) { m_gpu_release_func = std::move(func); }
+    
     size_t GetMemoryUsage() const override {
         return sizeof(*this) + m_pixel_data.size();
     }
@@ -53,6 +62,7 @@ private:
     u32 m_format = 0;  // VkFormat
     std::vector<u8> m_pixel_data;
     void* m_gpu_handle = nullptr;
+    GPUReleaseFunc m_gpu_release_func;  // Destroys m_gpu_handle (set by renderer)
 };
 
 // ===== Mesh Resource =====
@@ -91,6 +101,10 @@ public:
     void* GetIndexBuffer() const { return m_index_buffer; }
     void SetGPUBuffers(void* vertex, void* index) { m_vertex_buffer = vertex; m_index_buffer = index; }
     
+    // Register callbacks so Unload() can destroy the GPU buffers without leaking.
+    void SetVertexReleaseCallback(GPUReleaseFunc func) { m_vb_release_func = std::move(func); }
+    void SetIndexReleaseCallback (GPUReleaseFunc func) { m_ib_release_func = std::move(func); }
+    
     size_t GetMemoryUsage() const override {
         return sizeof(*this) + m_vertices.size() * sizeof(MeshVertex) + m_indices.size() * sizeof(u32);
     }
@@ -103,7 +117,9 @@ private:
     std::vector<u32> m_indices;
     AABB m_bounds;
     void* m_vertex_buffer = nullptr;
-    void* m_index_buffer = nullptr;
+    void* m_index_buffer  = nullptr;
+    GPUReleaseFunc m_vb_release_func;  // Destroys m_vertex_buffer (set by renderer)
+    GPUReleaseFunc m_ib_release_func;  // Destroys m_index_buffer  (set by renderer)
 };
 
 // ===== Material Resource =====

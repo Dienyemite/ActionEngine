@@ -3,8 +3,11 @@
 #include "resource.h"
 #include "resource_cache.h"
 #include <unordered_map>
+#include <unordered_set>
 #include <functional>
 #include <future>
+#include <mutex>
+#include <condition_variable>
 
 namespace action {
 
@@ -82,6 +85,13 @@ private:
     
     std::unordered_map<std::string, LoaderFunc> m_loaders;
     std::unordered_map<std::string, std::string> m_type_map;  // extension -> type name
+
+    // TOCTOU-safe concurrent loading:
+    //   Only one thread loads a given path at a time.  Other concurrent requests
+    //   for the same path block until the first load completes, then read from cache.
+    std::mutex              m_load_mutex;
+    std::condition_variable m_load_cv;
+    std::unordered_set<std::string> m_loading_paths;  // paths currently being loaded
 };
 
 // Template implementations

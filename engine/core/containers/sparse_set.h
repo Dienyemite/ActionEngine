@@ -28,11 +28,14 @@ public:
     
     // Add entity to set, returns dense index
     u32 Insert(u32 entity) {
-        EnsureCapacity(entity);
+        // Sparse array is keyed on the INDEX bits only (not the generation).
+        // This keeps the sparse array compact even with generation-packed handles.
+        u32 sparse_key = EntityIndex(entity);
+        EnsureCapacity(sparse_key);
         
         u32 dense_index = static_cast<u32>(m_dense.size());
-        m_dense.push_back(entity);
-        SetSparse(entity, dense_index);
+        m_dense.push_back(entity);           // Store full entity (generation included)
+        SetSparse(sparse_key, dense_index);
         
         return dense_index;
     }
@@ -41,28 +44,31 @@ public:
     void Remove(u32 entity) {
         if (!Contains(entity)) return;
         
-        u32 dense_index = GetSparse(entity);
+        u32 sparse_key  = EntityIndex(entity);
+        u32 dense_index = GetSparse(sparse_key);
         u32 last_entity = m_dense.back();
         
         // Swap with last element
         m_dense[dense_index] = last_entity;
-        SetSparse(last_entity, dense_index);
+        SetSparse(EntityIndex(last_entity), dense_index);
         
         // Remove last element
         m_dense.pop_back();
-        SetSparse(entity, INVALID);
+        SetSparse(sparse_key, INVALID);
     }
     
-    // Check if entity is in set
+    // Check if entity is in set (also validates generation via full-entity comparison)
     bool Contains(u32 entity) const {
-        if (entity >= m_sparse_pages.size() * PAGE_SIZE) return false;
+        u32 sparse_key = EntityIndex(entity);
+        if (sparse_key >= m_sparse_pages.size() * PAGE_SIZE) return false;
         
-        u32 page = entity / PAGE_SIZE;
-        if (page >= m_sparse_pages.size() || !m_sparse_pages[page]) return false;
+        u32 page_idx = sparse_key / PAGE_SIZE;
+        if (page_idx >= m_sparse_pages.size() || !m_sparse_pages[page_idx]) return false;
         
-        u32 index = entity % PAGE_SIZE;
-        u32 dense_index = m_sparse_pages[page][index];
+        u32 slot        = sparse_key % PAGE_SIZE;
+        u32 dense_index = m_sparse_pages[page_idx][slot];
         
+        // Full entity comparison: validates generation bits for free
         return dense_index != INVALID && 
                dense_index < m_dense.size() && 
                m_dense[dense_index] == entity;
@@ -71,15 +77,16 @@ public:
     // Get dense index for entity (returns INVALID if not found)
     // More efficient than Contains() + GetDenseIndex() separately
     u32 GetDenseIndex(u32 entity) const {
-        if (entity >= m_sparse_pages.size() * PAGE_SIZE) return INVALID;
+        u32 sparse_key = EntityIndex(entity);
+        if (sparse_key >= m_sparse_pages.size() * PAGE_SIZE) return INVALID;
         
-        u32 page = entity / PAGE_SIZE;
-        if (page >= m_sparse_pages.size() || !m_sparse_pages[page]) return INVALID;
+        u32 page_idx = sparse_key / PAGE_SIZE;
+        if (page_idx >= m_sparse_pages.size() || !m_sparse_pages[page_idx]) return INVALID;
         
-        u32 index = entity % PAGE_SIZE;
-        u32 dense_index = m_sparse_pages[page][index];
+        u32 slot        = sparse_key % PAGE_SIZE;
+        u32 dense_index = m_sparse_pages[page_idx][slot];
         
-        // Validate the mapping (sparse -> dense -> sparse must be consistent)
+        // Full entity comparison validates generation bits
         if (dense_index != INVALID && 
             dense_index < m_dense.size() && 
             m_dense[dense_index] == entity) {
@@ -109,8 +116,8 @@ public:
     }
     
 private:
-    void EnsureCapacity(u32 entity) {
-        u32 page = entity / PAGE_SIZE;
+    void EnsureCapacity(u32 sparse_key) {
+        u32 page = sparse_key / PAGE_SIZE;
         
         if (page >= m_sparse_pages.size()) {
             m_sparse_pages.resize(page + 1);
@@ -123,15 +130,15 @@ private:
         }
     }
     
-    u32 GetSparse(u32 entity) const {
-        u32 page = entity / PAGE_SIZE;
-        u32 index = entity % PAGE_SIZE;
+    u32 GetSparse(u32 sparse_key) const {
+        u32 page  = sparse_key / PAGE_SIZE;
+        u32 index = sparse_key % PAGE_SIZE;
         return m_sparse_pages[page][index];
     }
     
-    void SetSparse(u32 entity, u32 value) {
-        u32 page = entity / PAGE_SIZE;
-        u32 index = entity % PAGE_SIZE;
+    void SetSparse(u32 sparse_key, u32 value) {
+        u32 page  = sparse_key / PAGE_SIZE;
+        u32 index = sparse_key % PAGE_SIZE;
         m_sparse_pages[page][index] = value;
     }
     

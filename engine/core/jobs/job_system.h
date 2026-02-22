@@ -136,9 +136,13 @@ private:
     static constexpr u32 COUNTER_FREE = 0;       // Available for allocation
     static constexpr u32 COUNTER_RESERVED = UINT32_MAX; // Claimed but not yet initialized
 
+    // Padding is intentional for cache-line isolation — suppress MSVC C4324
+#pragma warning(push)
+#pragma warning(disable: 4324)
     struct alignas(64) CounterSlot {
         std::atomic<u32> value{COUNTER_FREE};
     };
+#pragma warning(pop)
     std::array<CounterSlot, MAX_COUNTERS> m_counter_slots;
     std::atomic<u32> m_counter_index{0};
 
