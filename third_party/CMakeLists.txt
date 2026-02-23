@@ -67,6 +67,16 @@ FetchContent_Declare(
 message(STATUS "Fetching Assimp...")
 FetchContent_MakeAvailable(assimp)
 
+# ===== Catch2 (test framework) =====
+FetchContent_Declare(
+    Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG        v3.7.1
+    GIT_SHALLOW    TRUE
+)
+message(STATUS "Fetching Catch2...")
+FetchContent_MakeAvailable(Catch2)
+
 # Create interface target for third-party libraries
 add_library(ThirdParty INTERFACE)
 target_link_libraries(ThirdParty INTERFACE ImGui assimp Jolt)

@@ -80,6 +80,12 @@ add_executable(Game
 
 target_link_libraries(Game PRIVATE ActionEngine)
 
+# Tests
+if(ENGINE_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
 # Copy assets and shaders
 add_custom_command(TARGET Game POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
