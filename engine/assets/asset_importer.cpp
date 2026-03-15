@@ -508,7 +508,7 @@ void AssetImporter::LoadSidecar(const std::string& filepath, ImportSettings& set
 // Engine mat4: m[col][row] (column-major)
 // ============================================================================
 
-mat4 AssetImporter::ConvertAiMatrix(const aiMatrix4x4& m) {
+static mat4 ConvertAiMatrix(const aiMatrix4x4& m) {
     mat4 r;
     // Column 0 = (a1, b1, c1, d1)
     r.m[0][0] = m.a1; r.m[0][1] = m.b1; r.m[0][2] = m.c1; r.m[0][3] = m.d1;

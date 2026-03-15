@@ -3,6 +3,7 @@ add_executable(UnitTests
     test_types.cpp
     test_ecs.cpp
     test_logging.cpp
+    test_animation.cpp
 )
 
 target_include_directories(UnitTests PRIVATE ${ENGINE_TEST_INCLUDES})
@@ -10,6 +11,8 @@ target_include_directories(UnitTests PRIVATE ${ENGINE_TEST_INCLUDES})
 target_link_libraries(UnitTests PRIVATE
     EngineCore
     EngineGameplay   # ECS
+    EngineAnimation
+    EngineAssets
     Catch2::Catch2WithMain
 )
 

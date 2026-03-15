@@ -237,9 +237,6 @@ private:
     void ExtractAnimations(const aiScene* scene, ImportedScene& out_scene);
     void ExtractSkinnedMeshes(const aiScene* scene, ImportedScene& out_scene);
     
-    // Assimp matrix → engine column-major mat4
-    static mat4 ConvertAiMatrix(const aiMatrix4x4& m);
-    
     // Helper functions
     void ApplyTransform(ImportedScene& scene, const ImportSettings& settings);
     void CalculateBounds(ImportedScene& scene);
