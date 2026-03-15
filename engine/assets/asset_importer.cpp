@@ -1,4 +1,5 @@
 #include "asset_importer.h"
+#include "aeimport.h"
 #include "core/logging.h"
 #include <fstream>
 #include <sstream>
@@ -50,8 +51,12 @@ ImportResult AssetImporter::Import(const std::string& filepath, const ImportSett
     
     ReportProgress(0.0f, "Loading " + filepath);
     
+    // Apply .aeimport sidecar overrides if present
+    ImportSettings effective_settings = settings;
+    LoadSidecar(filepath, effective_settings);
+    
     // Use Assimp for all formats
-    result = ImportWithAssimp(filepath, settings);
+    result = ImportWithAssimp(filepath, effective_settings);
     
     if (result.success) {
         // Apply post-processing
@@ -162,6 +167,23 @@ ImportResult AssetImporter::ImportWithAssimp(const std::string& filepath, const 
     // Process node hierarchy
     ProcessNode(scene->mRootNode, scene, result.scene.root_node);
     result.scene.total_nodes = CountNodes(result.scene.root_node);
+    
+    // Extract skeletal animation data if requested
+    if (settings.import_animations) {
+        ReportProgress(0.75f, "Extracting skeleton & animations...");
+        ExtractSkeleton(scene, result.scene);
+        ExtractAnimations(scene, result.scene);
+        ExtractSkinnedMeshes(scene, result.scene);
+        
+        if (result.scene.skeleton.is_valid()) {
+            LOG_INFO("  Skeleton: {} bones", result.scene.skeleton.bones.size());
+        }
+        if (!result.scene.animations.empty()) {
+            LOG_INFO("  Animations: {}", result.scene.animations.size());
+            for (const auto& a : result.scene.animations)
+                LOG_INFO("    '{}' ({:.2f}s)", a.name, a.duration);
+        }
+    }
     
     result.success = true;
     return result;
@@ -456,6 +478,201 @@ std::vector<MeshHandle> AssetImporter::CreateMeshes(const ImportedScene& scene, 
     }
     
     return handles;
+}
+
+// ============================================================================
+// Sidecar loading
+// ============================================================================
+
+void AssetImporter::LoadSidecar(const std::string& filepath, ImportSettings& settings) {
+    std::string sidecar_path = GetAEImportPath(filepath);
+    AEImport data = LoadAEImport(sidecar_path);
+    if (!data.is_valid()) return;
+
+    const AEImportOverrides& ov = data.import_settings;
+    settings.scale             = ov.scale;
+    settings.flip_uvs          = ov.flip_uvs;
+    settings.generate_normals  = ov.generate_normals;
+    settings.optimize_meshes   = ov.optimize_meshes;
+    settings.import_animations = ov.import_animations;
+    settings.source_up_axis    = (ov.up_axis == "Z")
+        ? ImportSettings::UpAxis::Z
+        : ImportSettings::UpAxis::Y;
+
+    LOG_INFO("AssetImporter: applied .aeimport overrides from '{}'", sidecar_path);
+}
+
+// ============================================================================
+// Matrix conversion: Assimp row-major → engine column-major mat4
+// Assimp: row-major, field names a1-d4 where a=row0, 1=col0
+// Engine mat4: m[col][row] (column-major)
+// ============================================================================
+
+mat4 AssetImporter::ConvertAiMatrix(const aiMatrix4x4& m) {
+    mat4 r;
+    // Column 0 = (a1, b1, c1, d1)
+    r.m[0][0] = m.a1; r.m[0][1] = m.b1; r.m[0][2] = m.c1; r.m[0][3] = m.d1;
+    // Column 1 = (a2, b2, c2, d2)
+    r.m[1][0] = m.a2; r.m[1][1] = m.b2; r.m[1][2] = m.c2; r.m[1][3] = m.d2;
+    // Column 2 = (a3, b3, c3, d3)
+    r.m[2][0] = m.a3; r.m[2][1] = m.b3; r.m[2][2] = m.c3; r.m[2][3] = m.d3;
+    // Column 3 = (a4, b4, c4, d4)
+    r.m[3][0] = m.a4; r.m[3][1] = m.b4; r.m[3][2] = m.c4; r.m[3][3] = m.d4;
+    return r;
+}
+
+// ============================================================================
+// Skeleton extraction
+// ============================================================================
+
+void AssetImporter::ExtractSkeleton(const aiScene* scene, ImportedScene& out_scene) {
+    // Collect all unique bone names and their offset matrices from every mesh
+    std::unordered_map<std::string, mat4> bone_offset_map;
+
+    for (u32 m = 0; m < scene->mNumMeshes; ++m) {
+        aiMesh* mesh = scene->mMeshes[m];
+        for (u32 b = 0; b < mesh->mNumBones; ++b) {
+            aiBone* bone = mesh->mBones[b];
+            std::string name = bone->mName.C_Str();
+            if (bone_offset_map.find(name) == bone_offset_map.end()) {
+                bone_offset_map[name] = ConvertAiMatrix(bone->mOffsetMatrix);
+            }
+        }
+    }
+
+    if (bone_offset_map.empty()) return;
+
+    // Build index map (bones will be added in traversal order below)
+    std::unordered_map<std::string, i32> bone_index_map;
+    ImportedSkeleton& skel = out_scene.skeleton;
+
+    // Walk the scene node tree; add a bone entry when we encounter a named bone node
+    std::function<void(const aiNode*, i32)> walk = [&](const aiNode* node, i32 parent_idx) {
+        std::string name = node->mName.C_Str();
+        i32 my_idx = -1;
+
+        auto it = bone_offset_map.find(name);
+        if (it != bone_offset_map.end()) {
+            // This node is a bone
+            if (bone_index_map.find(name) == bone_index_map.end()) {
+                my_idx = (i32)skel.bones.size();
+                bone_index_map[name] = my_idx;
+
+                ImportedBone ib;
+                ib.name             = name;
+                ib.parent_index     = parent_idx;
+                ib.offset_matrix    = it->second;
+                ib.local_transform  = ConvertAiMatrix(node->mTransformation);
+                skel.bones.push_back(ib);
+            } else {
+                my_idx = bone_index_map[name];
+            }
+        }
+
+        for (u32 c = 0; c < node->mNumChildren; ++c) {
+            walk(node->mChildren[c], (my_idx >= 0) ? my_idx : parent_idx);
+        }
+    };
+
+    walk(scene->mRootNode, -1);
+    skel.name = scene->mRootNode->mName.C_Str();
+}
+
+// ============================================================================
+// Animation clip extraction
+// ============================================================================
+
+void AssetImporter::ExtractAnimations(const aiScene* scene, ImportedScene& out_scene) {
+    if (scene->mNumAnimations == 0) return;
+
+    out_scene.animations.reserve(scene->mNumAnimations);
+
+    for (u32 i = 0; i < scene->mNumAnimations; ++i) {
+        const aiAnimation* anim = scene->mAnimations[i];
+
+        ImportedAnimation clip;
+        clip.name             = anim->mName.C_Str();
+        clip.ticks_per_second = (anim->mTicksPerSecond > 0.0)
+                                ? (float)anim->mTicksPerSecond
+                                : 24.0f;
+        clip.duration         = (float)anim->mDuration / clip.ticks_per_second;
+
+        clip.channels.reserve(anim->mNumChannels);
+
+        for (u32 c = 0; c < anim->mNumChannels; ++c) {
+            const aiNodeAnim* chan = anim->mChannels[c];
+            const float inv_tps   = 1.0f / clip.ticks_per_second;
+
+            ImportedBoneChannel ch;
+            ch.bone_name = chan->mNodeName.C_Str();
+
+            ch.position_keys.reserve(chan->mNumPositionKeys);
+            for (u32 k = 0; k < chan->mNumPositionKeys; ++k) {
+                const auto& key = chan->mPositionKeys[k];
+                ch.position_keys.push_back({
+                    (float)key.mTime * inv_tps,
+                    {key.mValue.x, key.mValue.y, key.mValue.z}
+                });
+            }
+
+            ch.rotation_keys.reserve(chan->mNumRotationKeys);
+            for (u32 k = 0; k < chan->mNumRotationKeys; ++k) {
+                const auto& key = chan->mRotationKeys[k];
+                // Assimp quaternion: w,x,y,z — engine quat: x,y,z,w
+                ch.rotation_keys.push_back({
+                    (float)key.mTime * inv_tps,
+                    {key.mValue.x, key.mValue.y, key.mValue.z, key.mValue.w}
+                });
+            }
+
+            ch.scale_keys.reserve(chan->mNumScalingKeys);
+            for (u32 k = 0; k < chan->mNumScalingKeys; ++k) {
+                const auto& key = chan->mScalingKeys[k];
+                ch.scale_keys.push_back({
+                    (float)key.mTime * inv_tps,
+                    {key.mValue.x, key.mValue.y, key.mValue.z}
+                });
+            }
+
+            clip.channels.push_back(std::move(ch));
+        }
+
+        out_scene.animations.push_back(std::move(clip));
+    }
+}
+
+// ============================================================================
+// Skinned mesh bone-weight extraction
+// ============================================================================
+
+void AssetImporter::ExtractSkinnedMeshes(const aiScene* scene, ImportedScene& out_scene) {
+    for (u32 m = 0; m < scene->mNumMeshes; ++m) {
+        const aiMesh* mesh = scene->mMeshes[m];
+        if (mesh->mNumBones == 0) continue;
+
+        ImportedSkinnedMesh sm;
+        sm.mesh_index = (i32)m;
+        sm.bone_weights.reserve(mesh->mNumBones);
+
+        for (u32 b = 0; b < mesh->mNumBones; ++b) {
+            const aiBone* bone = mesh->mBones[b];
+
+            ImportedBoneWeights bw;
+            bw.bone_name = bone->mName.C_Str();
+            bw.weights.reserve(bone->mNumWeights);
+
+            for (u32 w = 0; w < bone->mNumWeights; ++w) {
+                bw.weights.push_back({
+                    bone->mWeights[w].mVertexId,
+                    bone->mWeights[w].mWeight
+                });
+            }
+
+            sm.bone_weights.push_back(std::move(bw));
+        }
+
+        out_scene.skinned_meshes.push_back(std::move(sm));
+    }
 }
 
 } // namespace action

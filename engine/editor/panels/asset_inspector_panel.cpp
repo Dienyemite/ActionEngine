@@ -1,0 +1,464 @@
+#include "asset_inspector_panel.h"
+#include "assets/asset_manager.h"
+#include "assets/asset_importer.h"
+#include "animation/animation_library.h"
+#include "core/logging.h"
+#include <imgui/imgui.h>
+#include <filesystem>
+#include <fstream>
+#include <nlohmann/json.hpp>
+
+namespace action {
+
+namespace fs = std::filesystem;
+using json   = nlohmann::json;
+
+// ---------------------------------------------------------------------------
+// SetAssetsDirectory / Refresh
+// ---------------------------------------------------------------------------
+
+void AssetInspectorPanel::SetAssetsDirectory(const std::string& dir) {
+    m_assets_dir = dir;
+    Refresh();
+}
+
+void AssetInspectorPanel::Refresh() {
+    m_entries.clear();
+    m_selected_index = -1;
+
+    if (m_assets_dir.empty()) return;
+
+    std::error_code ec;
+    for (const auto& entry : fs::recursive_directory_iterator(m_assets_dir, ec)) {
+        if (ec) break;
+        if (entry.path().extension() != ".aeimport") continue;
+
+        AssetInspectorEntry aie;
+        aie.sidecar_path = entry.path().string();
+        aie.data         = LoadAEImport(aie.sidecar_path);
+        aie.asset_name   = entry.path().stem().string();
+        aie.dirty        = false;
+        m_entries.push_back(std::move(aie));
+    }
+
+    LOG_INFO("AssetInspector: found {} .aeimport files", m_entries.size());
+}
+
+// ---------------------------------------------------------------------------
+// Draw
+// ---------------------------------------------------------------------------
+
+void AssetInspectorPanel::Draw() {
+    if (!visible) return;
+
+    ImGui::SetNextWindowSize(ImVec2(700, 500), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(400, 200), ImVec2(FLT_MAX, FLT_MAX));
+
+    if (!ImGui::Begin("Asset Inspector", &visible)) {
+        ImGui::End();
+        return;
+    }
+
+    // Toolbar row
+    if (ImGui::Button("  Refresh  ")) Refresh();
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%zu assets)", m_entries.size());
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 200.0f);
+    ImGui::TextDisabled("Assets: %s", m_assets_dir.c_str());
+
+    ImGui::Separator();
+
+    // Two-pane layout
+    const float list_width = 200.0f;
+    ImGui::BeginChild("##AIPaneLeft", ImVec2(list_width, -30), true);
+    DrawAssetList();
+    ImGui::EndChild();
+
+    ImGui::SameLine();
+
+    ImGui::BeginChild("##AIPaneRight", ImVec2(0, -30), true);
+    if (m_selected_index >= 0 && m_selected_index < (i32)m_entries.size()) {
+        DrawSettings(m_entries[m_selected_index]);
+    } else {
+        ImGui::TextDisabled("Select an asset on the left");
+        ImGui::TextDisabled("to edit its .aeimport settings.");
+    }
+    ImGui::EndChild();
+
+    // Footer status bar
+    ImGui::Separator();
+    if (m_status_timer > 0.0f) {
+        m_status_timer -= ImGui::GetIO().DeltaTime;
+        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "%s", m_status_message.c_str());
+    } else {
+        ImGui::TextDisabled("ActionEngine Asset Inspector — double-click to reimport");
+    }
+
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// DrawAssetList
+// ---------------------------------------------------------------------------
+void AssetInspectorPanel::DrawAssetList() {
+    ImGui::Text("Imported Assets");
+    ImGui::Separator();
+
+    for (i32 i = 0; i < (i32)m_entries.size(); ++i) {
+        const auto& e = m_entries[i];
+        const bool selected = (m_selected_index == i);
+
+        // Dirty indicator
+        const char* label = e.dirty
+            ? ("* " + e.asset_name).c_str()
+            : e.asset_name.c_str();
+
+        // The label is built with a temp string above — use PushID so each row
+        // has a unique ID without relying on the string content.
+        ImGui::PushID(i);
+        if (ImGui::Selectable(label, selected, ImGuiSelectableFlags_AllowDoubleClick)) {
+            m_selected_index = i;
+            if (ImGui::IsMouseDoubleClicked(0)) {
+                TriggerReimport(m_entries[i]);
+            }
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Double-click to reimport\n%s", e.sidecar_path.c_str());
+        }
+        ImGui::PopID();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DrawSettings
+// ---------------------------------------------------------------------------
+void AssetInspectorPanel::DrawSettings(AssetInspectorEntry& entry) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.85f, 1.0f, 1.0f));
+    ImGui::Text("%s", entry.asset_name.c_str());
+    ImGui::PopStyleColor();
+
+    if (entry.data.is_valid()) {
+        ImGui::TextDisabled("Source: %s  |  Blender %s  |  %s",
+                            entry.data.source_file.c_str(),
+                            entry.data.blender_version.c_str(),
+                            entry.data.export_timestamp.c_str());
+    } else {
+        ImGui::TextColored(ImVec4(1,0.4f,0.4f,1), "Warning: sidecar not yet generated by Blender addon");
+    }
+    ImGui::Separator();
+
+    bool changed = false;
+
+    if (ImGui::CollapsingHeader("Import Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+        changed |= DrawImportSettings(entry.data.import_settings);
+    }
+
+    if (ImGui::CollapsingHeader("LOD", ImGuiTreeNodeFlags_DefaultOpen)) {
+        changed |= DrawLodConfig(entry.data.lod);
+    }
+
+    if (!entry.data.mesh_overrides.empty()) {
+        if (ImGui::CollapsingHeader("Mesh Overrides", ImGuiTreeNodeFlags_DefaultOpen)) {
+            changed |= DrawMeshOverrides(entry.data.mesh_overrides);
+        }
+    }
+
+    if (!entry.data.animation_names.empty()) {
+        if (ImGui::CollapsingHeader("Animation Clips")) {
+            ImGui::Indent();
+            for (const auto& name : entry.data.animation_names) {
+                ImGui::BulletText("%s", name.c_str());
+            }
+            ImGui::Unindent();
+        }
+    }
+
+    if (changed) entry.dirty = true;
+
+    ImGui::Separator();
+
+    // Action buttons
+    const bool has_source = !entry.data.source_file.empty() || entry.data.is_valid();
+
+    ImGui::PushID("Actions");
+
+    if (ImGui::Button("  Reimport  ")) {
+        TriggerReimport(entry);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Re-run AssetImporter with the current settings");
+    }
+
+    if (entry.dirty) {
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.65f, 0.3f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.4f, 0.8f, 0.4f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.25f, 0.55f, 0.25f, 1.0f));
+        if (ImGui::Button("  Save Changes  ")) {
+            if (SaveSidecar(entry)) {
+                entry.dirty = false;
+                m_status_message = "Saved: " + entry.sidecar_path;
+                m_status_timer   = 3.0f;
+            }
+        }
+        ImGui::PopStyleColor(3);
+    }
+
+    ImGui::PopID();
+}
+
+// ---------------------------------------------------------------------------
+// DrawImportSettings
+// ---------------------------------------------------------------------------
+bool AssetInspectorPanel::DrawImportSettings(AEImportOverrides& s) {
+    bool changed = false;
+    ImGui::PushItemWidth(180.0f);
+
+    changed |= ImGui::SliderFloat("Scale",    &s.scale,  0.001f, 100.0f, "%.3f");
+    changed |= ImGui::Checkbox("Flip UVs",          &s.flip_uvs);
+    ImGui::SameLine(); changed |= ImGui::Checkbox("Generate Normals", &s.generate_normals);
+    changed |= ImGui::Checkbox("Optimize Meshes",   &s.optimize_meshes);
+    ImGui::SameLine(); changed |= ImGui::Checkbox("Import Animations", &s.import_animations);
+
+    // Up axis combo
+    const char* axes[] = {"Y", "Z"};
+    int axis_idx = (s.up_axis == "Z") ? 1 : 0;
+    if (ImGui::Combo("Up Axis", &axis_idx, axes, 2)) {
+        s.up_axis = axes[axis_idx];
+        changed = true;
+    }
+
+    ImGui::PopItemWidth();
+    return changed;
+}
+
+// ---------------------------------------------------------------------------
+// DrawLodConfig
+// ---------------------------------------------------------------------------
+bool AssetInspectorPanel::DrawLodConfig(AELodConfig& lod) {
+    bool changed = false;
+
+    changed |= ImGui::Checkbox("Generate LOD", &lod.generate);
+    if (!lod.generate) return changed;
+
+    int lvl = lod.level_count;
+    if (ImGui::SliderInt("LOD Levels", &lvl, 1, 5)) {
+        lod.level_count = lvl;
+        lod.distances.resize(std::max(0, lvl - 1), 30.0f);
+        changed = true;
+    }
+
+    for (int i = 0; i < (int)lod.distances.size() && i < 4; ++i) {
+        char label[32];
+        snprintf(label, sizeof(label), "LOD %d Distance", i + 1);
+        changed |= ImGui::DragFloat(label, &lod.distances[i], 1.0f, 1.0f, 2000.0f, "%.1f m");
+    }
+
+    return changed;
+}
+
+// ---------------------------------------------------------------------------
+// DrawMeshOverrides
+// ---------------------------------------------------------------------------
+bool AssetInspectorPanel::DrawMeshOverrides(std::vector<AEMeshOverride>& overrides) {
+    bool changed = false;
+
+    const char* collision_types[] = {
+        "none", "convex_hull", "trimesh", "capsule", "box", "sphere"
+    };
+
+    for (i32 i = 0; i < (i32)overrides.size(); ++i) {
+        AEMeshOverride& ov = overrides[i];
+        ImGui::PushID(i);
+
+        bool open = ImGui::CollapsingHeader(ov.name.c_str());
+        if (open) {
+            // Collision type combo
+            int col_idx = 0;
+            for (int c = 0; c < 6; ++c) {
+                if (ov.collision_type == collision_types[c]) { col_idx = c; break; }
+            }
+            if (ImGui::Combo("Collision", &col_idx, collision_types, 6)) {
+                ov.collision_type = collision_types[col_idx];
+                changed = true;
+            }
+
+            int layer = ov.physics_layer;
+            if (ImGui::SliderInt("Physics Layer", &layer, 0, 31)) {
+                ov.physics_layer = layer;
+                changed = true;
+            }
+
+            changed |= ImGui::Checkbox("Cast Shadows", &ov.cast_shadows);
+            ImGui::SameLine();
+            changed |= ImGui::Checkbox("Static",        &ov.is_static);
+            changed |= ImGui::SliderFloat("LOD Bias", &ov.lod_bias, 0.1f, 4.0f, "%.2f");
+        }
+
+        ImGui::PopID();
+    }
+
+    return changed;
+}
+
+// ---------------------------------------------------------------------------
+// SaveSidecar — write back to .aeimport JSON
+// ---------------------------------------------------------------------------
+bool AssetInspectorPanel::SaveSidecar(const AssetInspectorEntry& entry) {
+    const AEImport& d = entry.data;
+    const AEImportOverrides& is = d.import_settings;
+    const AELodConfig& lod      = d.lod;
+
+    json root;
+    root["ae_version"]       = d.ae_version > 0 ? d.ae_version : 1;
+    root["source_file"]      = d.source_file;
+    root["blender_version"]  = d.blender_version;
+    root["export_timestamp"] = d.export_timestamp;
+
+    root["import_settings"] = {
+        {"scale",             is.scale},
+        {"flip_uvs",          is.flip_uvs},
+        {"generate_normals",  is.generate_normals},
+        {"optimize_meshes",   is.optimize_meshes},
+        {"up_axis",           is.up_axis},
+        {"import_animations", is.import_animations},
+    };
+
+    root["lod"] = {
+        {"generate",    lod.generate},
+        {"level_count", lod.level_count},
+        {"distances",   lod.distances},
+    };
+
+    json mesh_arr = json::array();
+    for (const auto& ov : d.mesh_overrides) {
+        mesh_arr.push_back({
+            {"name",           ov.name},
+            {"collision",      ov.collision_type},
+            {"physics_layer",  ov.physics_layer},
+            {"cast_shadows",   ov.cast_shadows},
+            {"lod_bias",       ov.lod_bias},
+            {"static",         ov.is_static},
+        });
+    }
+    root["mesh_overrides"] = mesh_arr;
+    root["animation_names"] = d.animation_names;
+
+    std::ofstream f(entry.sidecar_path);
+    if (!f.is_open()) {
+        LOG_ERROR("AssetInspector: cannot write '{}'", entry.sidecar_path);
+        return false;
+    }
+    f << root.dump(2);
+    LOG_INFO("AssetInspector: saved '{}'", entry.sidecar_path);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// TriggerReimport
+// ---------------------------------------------------------------------------
+void AssetInspectorPanel::TriggerReimport(AssetInspectorEntry& entry) {
+    if (!m_assets) {
+        LOG_ERROR("AssetInspector: no AssetManager — cannot reimport");
+        return;
+    }
+
+    // Build the source asset path from the sidecar path
+    fs::path sidecar(entry.sidecar_path);
+    fs::path source_in_dir = sidecar.parent_path() / entry.data.source_file;
+
+    // Fall back: use the sidecar stem as the source filename
+    std::string source_path = source_in_dir.string();
+    if (!entry.data.source_file.empty() && !fs::exists(source_path)) {
+        // Try replacing extension
+        fs::path alt = sidecar;
+        alt.replace_extension(".glb");
+        if (fs::exists(alt)) source_path = alt.string();
+        else {
+            alt.replace_extension(".fbx");
+            if (fs::exists(alt)) source_path = alt.string();
+            else {
+                alt.replace_extension(".obj");
+                source_path = alt.string();
+            }
+        }
+    }
+
+    LOG_INFO("AssetInspector: reimporting '{}'", source_path);
+
+    // Build ImportSettings from the sidecar
+    AssetImporter importer;
+    importer.Initialize(m_assets);
+
+    ImportSettings settings;
+    const AEImportOverrides& ov = entry.data.import_settings;
+    settings.scale             = ov.scale;
+    settings.flip_uvs          = ov.flip_uvs;
+    settings.generate_normals  = ov.generate_normals;
+    settings.optimize_meshes   = ov.optimize_meshes;
+    settings.import_animations = ov.import_animations;
+    settings.source_up_axis    = (ov.up_axis == "Z")
+        ? ImportSettings::UpAxis::Z
+        : ImportSettings::UpAxis::Y;
+
+    ImportResult result = importer.Import(source_path, settings);
+
+    if (result.success) {
+        // Create GPU meshes
+        auto handles = importer.CreateMeshes(result.scene, *m_assets);
+
+        // Register animations if present
+        if (m_anim_lib && !result.scene.skeleton.bones.empty()) {
+            Skeleton skel;
+            skel.name  = entry.asset_name;
+            skel.bones.reserve(result.scene.skeleton.bones.size());
+            for (const auto& sb : result.scene.skeleton.bones) {
+                Bone b;
+                b.name                = sb.name;
+                b.parent_index        = sb.parent_index;
+                b.local_rest_transform= sb.local_transform;
+                b.inv_bind_pose       = sb.offset_matrix;
+                skel.bones.push_back(b);
+            }
+            m_anim_lib->AddSkeleton(std::move(skel));
+        }
+
+        if (m_anim_lib) {
+            for (auto& ia : result.scene.animations) {
+                AnimationClip clip;
+                clip.name     = ia.name;
+                clip.duration = ia.duration;
+                clip.looping  = true;
+
+                const Skeleton* skel = m_anim_lib->GetSkeleton(entry.asset_name);
+                for (auto& ich : ia.channels) {
+                    BoneChannel ch;
+                    ch.bone_index = skel ? skel->FindBone(ich.bone_name) : -1;
+
+                    for (auto& k : ich.position_keys)
+                        ch.position_keys.push_back({k.time, k.value});
+                    for (auto& k : ich.rotation_keys)
+                        ch.rotation_keys.push_back({k.time, k.value});
+                    for (auto& k : ich.scale_keys)
+                        ch.scale_keys.push_back({k.time, k.value});
+
+                    clip.channels.push_back(std::move(ch));
+                }
+                m_anim_lib->AddClip(std::move(clip));
+            }
+        }
+
+        m_status_message = "Reimported: " + entry.asset_name
+                           + "  (" + std::to_string(handles.size()) + " meshes)";
+        m_status_timer   = 4.0f;
+
+        if (m_reimport_cb) m_reimport_cb(entry.sidecar_path);
+    } else {
+        m_status_message = "Reimport FAILED: " + result.error_message;
+        m_status_timer   = 6.0f;
+        LOG_ERROR("AssetInspector: reimport failed: {}", result.error_message);
+    }
+}
+
+} // namespace action

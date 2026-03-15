@@ -63,6 +63,64 @@ struct ImportedNode {
 };
 
 /*
+ * ImportedBone - A single bone from a skeletal hierarchy
+ */
+struct ImportedBone {
+    std::string name;
+    i32 parent_index = -1;      // -1 = root bone
+    mat4 offset_matrix;         // Inverse bind-pose (from Assimp aiBone::mOffsetMatrix)
+    mat4 local_transform;       // Rest-pose local transform (from node hierarchy)
+};
+
+/*
+ * ImportedSkeleton - Full bone hierarchy extracted from a skinned mesh
+ */
+struct ImportedSkeleton {
+    std::string name;
+    std::vector<ImportedBone> bones;
+    bool is_valid() const { return !bones.empty(); }
+};
+
+/*
+ * ImportedAnim* - Keyframe types for skeletal animation channels
+ */
+struct ImportedAnimKeyPos   { float time; vec3 value; };
+struct ImportedAnimKeyRot   { float time; quat value; };
+struct ImportedAnimKeyScale { float time; vec3 value; };
+
+struct ImportedBoneChannel {
+    std::string bone_name;
+    std::vector<ImportedAnimKeyPos>   position_keys;
+    std::vector<ImportedAnimKeyRot>   rotation_keys;
+    std::vector<ImportedAnimKeyScale> scale_keys;
+};
+
+/*
+ * ImportedAnimation - One animation clip (e.g. "Walk", "Run", "Attack")
+ */
+struct ImportedAnimation {
+    std::string name;
+    float duration = 0.0f;          // Duration in seconds
+    float ticks_per_second = 24.0f;
+    std::vector<ImportedBoneChannel> channels;
+};
+
+/*
+ * ImportedVertexWeight / ImportedBoneWeights - Per-vertex skinning influence data
+ */
+struct ImportedVertexWeight { u32 vertex_index; float weight; };
+
+struct ImportedBoneWeights {
+    std::string bone_name;
+    std::vector<ImportedVertexWeight> weights;
+};
+
+struct ImportedSkinnedMesh {
+    i32 mesh_index = -1;                             // Index into ImportedScene::meshes
+    std::vector<ImportedBoneWeights> bone_weights;   // Per-bone influence lists
+};
+
+/*
  * ImportedScene - Complete imported 3D scene
  */
 struct ImportedScene {
@@ -73,6 +131,11 @@ struct ImportedScene {
     
     // Bounding box of entire scene
     AABB scene_bounds;
+    
+    // Skeletal animation data (populated when import_animations == true)
+    ImportedSkeleton skeleton;
+    std::vector<ImportedAnimation> animations;
+    std::vector<ImportedSkinnedMesh> skinned_meshes;
     
     // Statistics
     u32 total_vertices = 0;
@@ -165,6 +228,17 @@ private:
     void ProcessNode(aiNode* node, const aiScene* scene, ImportedNode& out_node);
     void ExtractMaterials(const aiScene* scene, ImportedScene& out_scene, const std::string& model_path);
     u32 CountNodes(const ImportedNode& node);
+    
+    // Sidecar (.aeimport) loading — overrides ImportSettings before import
+    void LoadSidecar(const std::string& filepath, ImportSettings& settings);
+    
+    // Skeletal animation extraction
+    void ExtractSkeleton(const aiScene* scene, ImportedScene& out_scene);
+    void ExtractAnimations(const aiScene* scene, ImportedScene& out_scene);
+    void ExtractSkinnedMeshes(const aiScene* scene, ImportedScene& out_scene);
+    
+    // Assimp matrix → engine column-major mat4
+    static mat4 ConvertAiMatrix(const aiMatrix4x4& m);
     
     // Helper functions
     void ApplyTransform(ImportedScene& scene, const ImportSettings& settings);

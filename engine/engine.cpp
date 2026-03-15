@@ -135,6 +135,13 @@ bool Engine::Initialize(const EngineConfig& config) {
         return false;
     }
     
+    // 11. Animation system
+    m_animation_library = std::make_unique<AnimationLibrary>();
+    m_ecs->AddSystem<AnimationSystem>(m_ecs.get(), m_animation_library.get());
+    
+    // Pass animation library to editor for hot-reload / reimport
+    m_editor->SetAnimationLibrary(m_animation_library.get());
+    
     // Set up UI render callback for editor
     m_renderer->SetUIRenderCallback([this](VkCommandBuffer cmd) {
         m_editor->Render(cmd);
@@ -158,6 +165,7 @@ void Engine::Shutdown() {
     if (m_physics) m_physics->Shutdown();
     // AssetManager must shutdown before Renderer (which owns VulkanContext)
     if (m_ecs) m_ecs->Shutdown();
+    if (m_animation_library) m_animation_library.reset();
     if (m_world) m_world->Shutdown();
     if (m_assets) m_assets->Shutdown();  // Clean up GPU resources first
     if (m_renderer) m_renderer->Shutdown();  // Then destroy Vulkan context

@@ -77,6 +77,18 @@ FetchContent_Declare(
 message(STATUS "Fetching Catch2...")
 FetchContent_MakeAvailable(Catch2)
 
+# ===== nlohmann/json — header-only, used for .aeimport sidecar parsing =====
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    TRUE
+)
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+set(JSON_Install    OFF CACHE INTERNAL "")
+message(STATUS "Fetching nlohmann/json...")
+FetchContent_MakeAvailable(nlohmann_json)
+
 # Create interface target for third-party libraries
 add_library(ThirdParty INTERFACE)
 target_link_libraries(ThirdParty INTERFACE ImGui assimp Jolt)

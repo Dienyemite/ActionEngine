@@ -1,4 +1,5 @@
 #include "editor.h"
+#include "animation/animation_library.h"
 #include "core/logging.h"
 #include "render/renderer.h"
 #include "platform/platform.h"
@@ -43,6 +44,11 @@ bool Editor::Initialize(Renderer& renderer, Platform& platform, ECS& ecs,
     m_shader_graph_editor = std::make_unique<ShaderGraphEditor>();
     m_shader_graph_editor->Initialize();
     m_shader_graph_editor->visible = false;  // Start hidden
+
+    // Asset Inspector panel
+    m_asset_inspector_panel = std::make_unique<AssetInspectorPanel>();
+    m_asset_inspector_panel->SetAssetManager(m_assets);
+    m_asset_inspector_panel->visible = false;  // Start hidden
     
     // Set up Inspector delete callback
     m_inspector_panel->SetDeleteCallback([this](u32 node_id) {
@@ -97,6 +103,12 @@ void Editor::CreatePrimitiveMeshes() {
     LOG_INFO("Created primitive meshes for editor");
 }
 
+void Editor::SetAnimationLibrary(AnimationLibrary* lib) {
+    if (m_asset_inspector_panel) {
+        m_asset_inspector_panel->SetAnimationLibrary(lib);
+    }
+}
+
 void Editor::Shutdown() {
     LOG_INFO("Editor shutting down...");
     
@@ -110,6 +122,7 @@ void Editor::Shutdown() {
     m_console_panel.reset();
     m_gizmo_panel.reset();
     m_shader_graph_editor.reset();
+    m_asset_inspector_panel.reset();
     
     if (m_imgui_renderer) {
         m_imgui_renderer->Shutdown();
@@ -266,6 +279,9 @@ void Editor::Update(float dt) {
     
     // Draw shader graph editor
     m_shader_graph_editor->Draw(*m_renderer);
+
+    // Draw asset inspector panel
+    m_asset_inspector_panel->Draw();
     
     // Show demo window if enabled
     if (m_show_demo_window) {
@@ -537,6 +553,7 @@ void Editor::DrawMenuBar() {
             ImGui::MenuItem("Console", nullptr, &m_console_panel->visible);
             ImGui::Separator();
             ImGui::MenuItem("Shader Graph", nullptr, &m_shader_graph_editor->visible);
+            ImGui::MenuItem("Asset Inspector", nullptr, &m_asset_inspector_panel->visible);
             ImGui::Separator();
             ImGui::MenuItem("ImGui Demo", nullptr, &m_show_demo_window);
             ImGui::EndMenu();
@@ -1374,6 +1391,11 @@ bool Editor::OpenProject(const std::string& path) {
         m_scene_modified = false;
         
         Log("Opened project: " + m_active_project->GetName(), 0);
+        
+        // Refresh asset inspector with new project's assets directory
+        if (m_asset_inspector_panel) {
+            m_asset_inspector_panel->SetAssetsDirectory(m_active_project->GetAssetsDirectory());
+        }
         
         // Load default scene if available and file exists
         const auto& scenes = m_active_project->GetScenes();

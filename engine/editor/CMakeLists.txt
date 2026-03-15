@@ -27,6 +27,8 @@ add_library(EngineEditor STATIC
     shader_graph/shader_graph.h
     shader_graph/shader_graph_editor.cpp
     shader_graph/shader_graph_editor.h
+    panels/asset_inspector_panel.cpp
+    panels/asset_inspector_panel.h
 )
 
 target_include_directories(EngineEditor PUBLIC
@@ -39,5 +41,8 @@ target_link_libraries(EngineEditor PUBLIC
     EngineCore
     EnginePlatform
     EngineRender
+    EngineAssets
+    EngineAnimation
     ImGui
+    nlohmann_json::nlohmann_json
 )

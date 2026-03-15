@@ -5,6 +5,8 @@ add_library(EngineAssets STATIC
     asset_importer.cpp
     asset_hot_reloader.h
     asset_hot_reloader.cpp
+    aeimport.h
+    aeimport_parser.cpp
 )
 
 target_include_directories(EngineAssets PUBLIC
@@ -15,4 +17,5 @@ target_link_libraries(EngineAssets PUBLIC
     EngineCore
     EnginePlatform
     Vulkan::Vulkan
-    assimp)
+    assimp
+    nlohmann_json::nlohmann_json)

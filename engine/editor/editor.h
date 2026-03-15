@@ -9,6 +9,7 @@
 #include "panels/inspector_panel.h"
 #include "panels/console_panel.h"
 #include "panels/gizmo_panel.h"
+#include "panels/asset_inspector_panel.h"
 #include "commands/command.h"
 #include "prefabs/prefab.h"
 #include "assets/asset_hot_reloader.h"
@@ -27,13 +28,7 @@ class Platform;
 class ECS;
 class AssetManager;
 class WorldManager;
-
-/*
- * Editor - Godot-style dockable editor interface
- * 
- * Features:
- * - Dockable panels (viewport, scene tree, inspector, console)
- * - Transform gizmos (future)
+class AnimationLibrary;
  * - Node selection and property editing
  * - Play/Stop controls
  */
@@ -75,6 +70,9 @@ public:
     bool Initialize(Renderer& renderer, Platform& platform, ECS& ecs, 
                     AssetManager& assets, WorldManager& world, const EditorConfig& config = {});
     void Shutdown();
+
+    // Inject animation library (called from Engine after it is created)
+    void SetAnimationLibrary(AnimationLibrary* lib);
     
     // Call each frame
     void BeginFrame();
@@ -192,6 +190,7 @@ private:
     std::unique_ptr<ConsolePanel> m_console_panel;
     std::unique_ptr<GizmoPanel> m_gizmo_panel;
     std::unique_ptr<ShaderGraphEditor> m_shader_graph_editor;
+    std::unique_ptr<AssetInspectorPanel> m_asset_inspector_panel;
     
     // Prefab system
     PrefabManager m_prefab_manager;
