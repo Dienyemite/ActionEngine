@@ -189,6 +189,9 @@ bool Engine::Initialize(const EngineConfig& config) {
     // Pass animation library to editor for hot-reload / reimport
     m_editor->SetAnimationLibrary(m_animation_library.get());
 
+    // Pass script system to editor so the Inspector can attach/remove scripts
+    m_editor->SetScriptSystem(m_scripts.get());
+
     // 12. Terrain system
     m_terrain = std::make_unique<TerrainSystem>();
     m_terrain->Initialize(m_assets.get());

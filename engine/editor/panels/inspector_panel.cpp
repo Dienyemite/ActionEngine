@@ -1,5 +1,6 @@
 #include "inspector_panel.h"
 #include "editor/editor.h"
+#include "gameplay/ecs/ecs.h"
 #include "core/logging.h"
 #include <imgui/imgui.h>
 #include <cstring>
@@ -184,41 +185,121 @@ void InspectorPanel::DrawNodeProperties(EditorNode& node) {
     }
     
     // Scripts/Components section
-    if (ImGui::CollapsingHeader("Scripts")) {
-        ImGui::TextDisabled("No scripts attached");
-        if (ImGui::Button("Add Script", ImVec2(-1, 0))) {
+    if (ImGui::CollapsingHeader("Scripts", ImGuiTreeNodeFlags_DefaultOpen)) {
+        bool has_scripts = false;
+
+        if (m_ecs && m_scripts && node.entity != INVALID_ENTITY) {
+            if (auto* sc = m_ecs->GetComponent<ScriptComponent>(node.entity)) {
+                has_scripts = !sc->scripts.empty();
+
+                // List attached scripts
+                Script* to_remove = nullptr;
+                for (auto& script : sc->scripts) {
+                    ImGui::PushID(script.get());
+
+                    // Enabled toggle
+                    bool enabled = script->IsEnabled();
+                    if (ImGui::Checkbox("##en", &enabled)) {
+                        script->SetEnabled(enabled);
+                    }
+                    ImGui::SameLine();
+
+                    // Script type name, greyed out if disabled
+                    if (!enabled) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                    ImGui::TextUnformatted(script->GetTypeName());
+                    if (!enabled) ImGui::PopStyleColor();
+
+                    // Remove button
+                    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20.0f + ImGui::GetCursorPosX());
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.1f, 0.1f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
+                    if (ImGui::SmallButton("X")) {
+                        to_remove = script.get();
+                    }
+                    ImGui::PopStyleColor(2);
+
+                    ImGui::PopID();
+                }
+
+                // Deferred removal (avoid invalidating iterator)
+                if (to_remove) {
+                    m_scripts->RemoveScript(node.entity, to_remove);
+                }
+            }
+        }
+
+        if (!has_scripts) {
+            ImGui::TextDisabled("No scripts attached");
+        }
+
+        // Add Script button
+        ImGui::Spacing();
+        if (ImGui::Button("+ Add Script", ImVec2(-1, 0))) {
             m_show_script_dialog = true;
-            m_script_class[0] = '\0';
+            m_script_class[0]  = '\0';
+            m_script_filter[0] = '\0';
         }
     }
-    
-    // Script dialog modal
-    if (m_show_script_dialog) ImGui::OpenPopup("##AddScript");
-    if (ImGui::BeginPopup("##AddScript")) {
-        ImGui::Text("Attach Script");
+
+    // Add Script modal
+    if (m_show_script_dialog) {
+        ImGui::OpenPopup("Add Script");
+        m_show_script_dialog = false;
+    }
+    if (ImGui::BeginPopupModal("Add Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Select a script to attach to '%s':", node.name.c_str());
         ImGui::Separator();
-        ImGui::SetNextItemWidth(220);
-        ImGui::InputTextWithHint("##sc", "Class name (e.g. PlayerController)",
-                                 m_script_class, sizeof(m_script_class));
-        ImGui::SetNextItemWidth(220);
+
+        ImGui::SetNextItemWidth(280);
         ImGui::InputTextWithHint("##sf", "Filter...", m_script_filter, sizeof(m_script_filter));
+
+        // List registered script types
+        if (ImGui::BeginChild("##scriptlist", ImVec2(280, 200), true)) {
+            const auto& types = ScriptFactory::Instance().GetRegisteredTypes();
+            for (const auto& type_name : types) {
+                if (m_script_filter[0] != '\0' &&
+                    type_name.find(m_script_filter) == std::string::npos) continue;
+
+                bool selected = (type_name == m_script_class);
+                if (ImGui::Selectable(type_name.c_str(), selected)) {
+                    strncpy(m_script_class, type_name.c_str(), sizeof(m_script_class) - 1);
+                    m_script_class[sizeof(m_script_class) - 1] = '\0';
+                }
+            }
+            if (ScriptFactory::Instance().GetRegisteredTypes().empty()) {
+                ImGui::TextDisabled("No scripts registered.");
+                ImGui::TextDisabled("Call REGISTER_SCRIPT(MyScript)");
+                ImGui::TextDisabled("before engine.Run().");
+            }
+        }
+        ImGui::EndChild();
+
+        // Show selection
+        if (m_script_class[0] != '\0') {
+            ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f), "Selected: %s", m_script_class);
+        } else {
+            ImGui::TextDisabled("(none selected)");
+        }
+
         ImGui::Separator();
-        bool can_attach = m_script_class[0] != '\0';
+
+        bool can_attach = (m_script_class[0] != '\0' && m_scripts &&
+                           node.entity != INVALID_ENTITY);
         if (!can_attach) ImGui::BeginDisabled();
-        if (ImGui::Button("Attach")) {
-            LOG_INFO("Attaching script '{}' to node", m_script_class);
-            m_show_script_dialog = false;
+        if (ImGui::Button("Attach", ImVec2(120, 0))) {
+            m_scripts->AddScript(node.entity, m_script_class);
+            LOG_INFO("[Inspector] Attached script '{}' to entity {}", m_script_class, node.entity);
+            m_script_class[0] = '\0';
             ImGui::CloseCurrentPopup();
         }
         if (!can_attach) ImGui::EndDisabled();
         ImGui::SameLine();
-        if (ImGui::Button("Cancel")) {
-            m_show_script_dialog = false;
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            m_script_class[0] = '\0';
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
-    m_show_script_dialog = false;  // reset trigger each frame
 }
 
 bool InspectorPanel::DrawVec3(const char* label, vec3& value, float reset_value) {

@@ -1,11 +1,7 @@
 #include "engine/engine.h"
 #include "core/logging.h"
 #include "core/math/math.h"
-#include "gameplay/ecs/ecs.h"
-#include "physics/collision_shapes.h"
-#include "physics/character_controller.h"
 #include "scripting/builtin_scripts.h"
-#include "editor/editor.h"
 
 int main() {
     using namespace action;
@@ -96,10 +92,17 @@ int main() {
     PhysicsWorld& physics = engine.GetPhysics();
     AssetManager& assets = engine.GetAssets();
     
-    // Create primitive meshes (always needed for editor)
-    MeshHandle cube_mesh = assets.CreateCubeMesh(1.0f);
-    MeshHandle ground_mesh = assets.CreateCubeMesh(1.0f);
+    // Create primitive meshes (always needed for editor and test scene)
+    MeshHandle cube_mesh     = assets.CreateCubeMesh(1.0f);
+    MeshHandle ground_mesh   = assets.CreateCubeMesh(1.0f);
     MaterialHandle default_material{0};
+
+    // Load real assets for demo scene
+    MeshHandle player_mesh = assets.LoadMeshSync("assets/meshes/vikingmedieval_game_character.glb");
+    MeshHandle horse_mesh  = assets.LoadMeshSync("assets/meshes/horse.glb");
+    MeshHandle boss_mesh   = assets.LoadMeshSync("assets/meshes/goliath_sentinel__rpg_enemy.glb");
+    MeshHandle guard_mesh  = assets.LoadMeshSync("assets/models/InnaPrototype.obj");
+    assets.LoadTextureSync("assets/textures/5f03786d6e594e479aafeb7c97976ac0_RGB_horse.tga_0.png");
     
     if (CREATE_TEST_SCENE) {
     // ========================================
@@ -122,7 +125,7 @@ int main() {
     
     // Render component (visible cube)
     auto& player_render = ecs.AddComponent<RenderComponent>(player);
-    player_render.mesh = cube_mesh;
+    player_render.mesh = player_mesh;
     player_render.material = default_material;
     player_render.visible = true;
     
@@ -325,7 +328,7 @@ physics.AddCollider(step);
     // ========================================
     // DEMO SCENE: Boss + Mount + NavMesh + Audio + Cinematic
     // ========================================
-    constexpr bool CREATE_DEMO_SCENE = true;
+    constexpr bool CREATE_DEMO_SCENE = false;
     if (CREATE_DEMO_SCENE) {
         AudioSystem&    audio    = engine.GetAudioSystem();
         NavMesh&        navmesh  = engine.GetNavMesh();
@@ -334,12 +337,10 @@ physics.AddCollider(step);
         NavMeshSystem&  navSys   = engine.GetNavMeshSystem();
         CinematicSystem& cinSys  = engine.GetCinematicSystem();
 
-        // --- 1. Audio: load clips and start music ---
-        audio.LoadClip("music_main",  "assets/audio/main_theme.ogg",    180.0f, true,  SoundCategory::Music);
-        audio.LoadClip("sfx_sword",   "assets/audio/sword_swing.wav",   0.5f,  false, SoundCategory::SFX);
-        audio.LoadClip("sfx_gallop",  "assets/audio/horse_gallop.wav",  2.0f,  true,  SoundCategory::SFX);
-        audio.LoadClip("sfx_roar",    "assets/audio/boss_roar.wav",     3.0f,  false, SoundCategory::SFX);
-        audio.PlayMusic("music_main", 2.0f);
+        // --- 1. Audio ---
+        audio.LoadClip("sfx_gallop", "assets/audio/dragon-studio-horse-gallop-sfx-339736.wav", 2.0f, true,  SoundCategory::SFX);
+        audio.LoadClip("sfx_sword",  "assets/audio/sword_swing.wav",  0.5f,  false, SoundCategory::SFX);
+        audio.LoadClip("sfx_roar",   "assets/audio/boss_roar.wav",    3.0f,  false, SoundCategory::SFX);
 
         // --- 2. Build navmesh from terrain height ---
         navmesh.Build(-200.0f, -200.0f, 200.0f, 200.0f, 2.0f, 40.0f,
@@ -355,7 +356,7 @@ physics.AddCollider(step);
             tag.name = "Player";
             tag.tags = Tags::Player | Tags::Dynamic;
             auto& rc = ecs.AddComponent<RenderComponent>(player);
-            rc.mesh = cube_mesh; rc.material = default_material; rc.visible = true;
+            rc.mesh = player_mesh; rc.material = default_material; rc.visible = true;
             auto& cc = ecs.AddComponent<ColliderComponent>(player);
             cc.type = ColliderType::Capsule; cc.radius = 0.4f; cc.height = 1.8f;
             cc.layer = CollisionLayer::Player;
@@ -380,7 +381,7 @@ physics.AddCollider(step);
             tag.name = "GiantTroll";
             tag.tags = Tags::Enemy;
             auto& rc = ecs.AddComponent<RenderComponent>(boss_ent);
-            rc.mesh = cube_mesh; rc.material = default_material; rc.visible = true;
+            rc.mesh = boss_mesh; rc.material = default_material; rc.visible = true;
             auto& bc = ecs.AddComponent<BossComponent>(boss_ent);
             bc.name = "Giant Troll";
             bc.max_health = bc.current_health = 5000.0f;
@@ -434,7 +435,7 @@ physics.AddCollider(step);
             auto& tag = ecs.AddComponent<TagComponent>(horse);
             tag.name = "Horse";
             auto& rc = ecs.AddComponent<RenderComponent>(horse);
-            rc.mesh = cube_mesh; rc.material = default_material; rc.visible = true;
+            rc.mesh = horse_mesh; rc.material = default_material; rc.visible = true;
             auto& mc = ecs.AddComponent<MountableComponent>(horse);
             mc.type = MountType::Horse;
             mc.max_speed = 12.0f;
@@ -454,7 +455,7 @@ physics.AddCollider(step);
             tag.name = "PatrolGuard";
             tag.tags = Tags::Enemy;
             auto& rc = ecs.AddComponent<RenderComponent>(patrol);
-            rc.mesh = cube_mesh; rc.material = default_material; rc.visible = true;
+            rc.mesh = guard_mesh; rc.material = default_material; rc.visible = true;
             auto& col = ecs.AddComponent<ColliderComponent>(patrol);
             col.type = ColliderType::Capsule; col.radius = 0.4f; col.height = 1.8f;
             col.layer = CollisionLayer::Enemy;

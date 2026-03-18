@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/types.h"
+#include "scripting/script_system.h"
 #include <string>
 #include <functional>
 
@@ -8,6 +9,7 @@ namespace action {
 
 // Forward declare from editor.h  
 struct EditorNode;
+class ECS;
 
 /*
  * InspectorPanel - Property editor (Godot-style)
@@ -29,6 +31,9 @@ public:
     ~InspectorPanel() = default;
     
     void Draw(EditorNode* selected_node);
+
+    // Provide ECS + ScriptSystem so the Scripts section is live.
+    void SetScriptSystem(ScriptSystem* scripts, ECS* ecs) { m_scripts = scripts; m_ecs = ecs; }
     
     // Set callback for delete action
     void SetDeleteCallback(DeleteCallback callback) { m_delete_callback = callback; }
@@ -49,6 +54,10 @@ private:
     
     DeleteCallback m_delete_callback;
     u32 m_pending_delete_id = 0;  // Node ID to delete (processed after ImGui frame)
+
+    // Script system references (set by Editor)
+    ScriptSystem* m_scripts = nullptr;
+    ECS*          m_ecs     = nullptr;
     
     // Mesh browser modal state
     bool   m_show_mesh_browser = false;

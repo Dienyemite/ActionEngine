@@ -10,6 +10,7 @@
 #include "panels/console_panel.h"
 #include "panels/gizmo_panel.h"
 #include "panels/asset_inspector_panel.h"
+#include "panels/asset_browser_panel.h"
 #include "commands/command.h"
 #include "prefabs/prefab.h"
 #include "assets/asset_hot_reloader.h"
@@ -76,6 +77,9 @@ public:
 
     // Inject animation library (called from Engine after it is created)
     void SetAnimationLibrary(AnimationLibrary* lib);
+
+    // Inject script system (called from Engine after it is created)
+    void SetScriptSystem(ScriptSystem* scripts);
     
     // Call each frame
     void BeginFrame();
@@ -100,6 +104,11 @@ public:
     
     // Add nodes - creates actual ECS entities
     EditorNode* AddNode(const std::string& type, EditorNode* parent = nullptr);
+
+    // Load a mesh from a file path and add it as a Mesh node in the scene.
+    // This is the entry point used by the Asset Browser.
+    void AddMeshFromFile(const std::string& path);
+
     void DeleteNode(u32 node_id);
     
     // Node access/modification for commands
@@ -198,6 +207,7 @@ private:
     std::unique_ptr<GizmoPanel> m_gizmo_panel;
     std::unique_ptr<ShaderGraphEditor> m_shader_graph_editor;
     std::unique_ptr<AssetInspectorPanel> m_asset_inspector_panel;
+    std::unique_ptr<AssetBrowserPanel>   m_asset_browser_panel;
     
     // Prefab system
     PrefabManager m_prefab_manager;
@@ -246,6 +256,7 @@ private:
     ECS* m_ecs = nullptr;
     AssetManager* m_assets = nullptr;
     WorldManager* m_world = nullptr;
+    ScriptSystem* m_scripts = nullptr;
     
     // Undo/Redo history
     CommandHistory m_command_history;

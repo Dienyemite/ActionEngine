@@ -49,6 +49,14 @@ bool Editor::Initialize(Renderer& renderer, Platform& platform, ECS& ecs,
     m_asset_inspector_panel = std::make_unique<AssetInspectorPanel>();
     m_asset_inspector_panel->SetAssetManager(m_assets);
     m_asset_inspector_panel->visible = false;  // Start hidden
+
+    // Asset Browser panel
+    m_asset_browser_panel = std::make_unique<AssetBrowserPanel>();
+    m_asset_browser_panel->SetRootDirectory("assets");
+    m_asset_browser_panel->SetPlaceCallback([this](const std::string& path) {
+        AddMeshFromFile(path);
+    });
+    m_asset_browser_panel->visible = true;  // Open by default
     
     // Set up Inspector delete callback
     m_inspector_panel->SetDeleteCallback([this](u32 node_id) {
@@ -106,6 +114,13 @@ void Editor::CreatePrimitiveMeshes() {
 void Editor::SetAnimationLibrary(AnimationLibrary* lib) {
     if (m_asset_inspector_panel) {
         m_asset_inspector_panel->SetAnimationLibrary(lib);
+    }
+}
+
+void Editor::SetScriptSystem(ScriptSystem* scripts) {
+    m_scripts = scripts;
+    if (m_inspector_panel) {
+        m_inspector_panel->SetScriptSystem(m_scripts, m_ecs);
     }
 }
 
@@ -217,6 +232,9 @@ void Editor::Update(float dt) {
     m_inspector_panel->Draw(selected);
     
     m_console_panel->Draw();
+    
+    // Draw asset browser
+    m_asset_browser_panel->Draw();
     
     // Draw gizmos for selected object (if any and not in play mode)
     if (selected && selected->entity != INVALID_ENTITY && !m_play_mode && m_viewport_panel->show_gizmos) {
@@ -555,6 +573,7 @@ void Editor::DrawMenuBar() {
             ImGui::MenuItem("Scene Tree", nullptr, &m_scene_tree_panel->visible);
             ImGui::MenuItem("Inspector", nullptr, &m_inspector_panel->visible);
             ImGui::MenuItem("Console", nullptr, &m_console_panel->visible);
+            ImGui::MenuItem("Asset Browser", nullptr, &m_asset_browser_panel->visible);
             ImGui::Separator();
             ImGui::MenuItem("Shader Graph", nullptr, &m_shader_graph_editor->visible);
             ImGui::MenuItem("Asset Inspector", nullptr, &m_asset_inspector_panel->visible);
@@ -905,6 +924,80 @@ void Editor::DrawSavePrefabPopup() {
         ImGui::EndPopup();
     }
 }
+
+// ============================================================================
+// AddMeshFromFile — load a mesh asset and place it as a node in the scene
+// ============================================================================
+
+void Editor::AddMeshFromFile(const std::string& path) {
+    if (!m_assets) return;
+
+    MeshHandle mesh = m_assets->LoadMeshSync(path);
+    if (!mesh.is_valid()) {
+        Log("Failed to load mesh: " + path, 2);
+        return;
+    }
+
+    // Derive display name from the filename stem
+    std::string name = path;
+    size_t slash = name.find_last_of("/\\");
+    if (slash != std::string::npos) name = name.substr(slash + 1);
+    size_t dot = name.find_last_of('.');
+    if (dot != std::string::npos) name = name.substr(0, dot);
+
+    // Create editor node
+    EditorNode node;
+    node.id = m_next_node_id++;
+    node.name = name;
+    node.type = "Mesh";
+    node.mesh = mesh;
+    node.visible = true;
+    node.scale = {1, 1, 1};
+
+    // Create ECS entity
+    Entity entity = m_ecs->CreateEntity();
+    node.entity = entity;
+
+    auto& transform = m_ecs->AddComponent<TransformComponent>(entity);
+    transform.position = node.position;
+    transform.rotation = quat::identity();
+    transform.scale = node.scale;
+
+    auto& render = m_ecs->AddComponent<RenderComponent>(entity);
+    render.mesh = mesh;
+    render.visible = true;
+    render.cast_shadow = true;
+
+    auto& bounds = m_ecs->AddComponent<BoundsComponent>(entity);
+    if (MeshData* md = m_assets->GetMesh(mesh)) {
+        bounds.local_bounds = md->bounds;
+        bounds.world_bounds = md->bounds;
+    }
+
+    auto& tag = m_ecs->AddComponent<TagComponent>(entity);
+    tag.name = name;
+    tag.tags = Tags::Prop | Tags::Dynamic;
+
+    WorldObject obj;
+    obj.entity  = entity;
+    obj.position = node.position;
+    obj.bounds   = bounds.world_bounds;
+    obj.mesh     = mesh;
+    obj.color    = vec4{0.8f, 0.8f, 0.8f, 1.0f};
+    obj.visible  = true;
+    obj.lod_level = 0;
+    m_world->AddObject(obj);
+
+    m_scene_root.children.push_back(node);
+    SetSelectedNode(m_scene_root.children.back().id);
+    m_scene_modified = true;
+
+    Log("Placed asset: " + name, 0);
+}
+
+// ============================================================================
+// AddNode — add a primitive or empty node
+// ============================================================================
 
 EditorNode* Editor::AddNode(const std::string& type, EditorNode* parent) {
     if (!parent) {

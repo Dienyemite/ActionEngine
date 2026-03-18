@@ -29,6 +29,8 @@ add_library(EngineEditor STATIC
     shader_graph/shader_graph_editor.h
     panels/asset_inspector_panel.cpp
     panels/asset_inspector_panel.h
+    panels/asset_browser_panel.cpp
+    panels/asset_browser_panel.h
 )
 
 target_include_directories(EngineEditor PUBLIC
