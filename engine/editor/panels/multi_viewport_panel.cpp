@@ -483,8 +483,25 @@ void MultiViewportPanel::HandleViewportInput(SingleViewport& viewport) {
         float dy = io.MouseDelta.y;
         
         if (io.KeyShift) {
-            // Pan
-            // TODO: Implement proper panning based on camera orientation
+            // Pan: move the camera target in view-space right / up directions.
+            float yaw_rad   = viewport.camera_yaw   * (3.14159265f / 180.0f);
+            float pitch_rad = viewport.camera_pitch * (3.14159265f / 180.0f);
+
+            // Forward direction (from camera toward target)
+            vec3 forward{};
+            forward.x = std::cosf(pitch_rad) * std::sinf(yaw_rad);
+            forward.y = std::sinf(pitch_rad);
+            forward.z = std::cosf(pitch_rad) * std::cosf(yaw_rad);
+
+            const vec3 world_up{0.0f, 1.0f, 0.0f};
+            vec3 right   = cross(forward, world_up).normalized();
+            vec3 cam_up  = cross(right, forward).normalized();
+
+            // Scale pan speed proportionally to distance
+            float pan_speed = viewport.camera_distance * 0.002f;
+            viewport.camera_target = viewport.camera_target
+                - right  * (dx * pan_speed)
+                + cam_up * (dy * pan_speed);
         } else {
             // Orbit
             viewport.camera_yaw -= dx * 0.3f;

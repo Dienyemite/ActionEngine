@@ -502,7 +502,18 @@ void ShaderGraphEditor::DrawNodeContextMenu() {
         }
         
         if (ImGui::MenuItem("Duplicate", "Ctrl+D")) {
-            // TODO: Implement duplication
+            // Duplicate each selected node at a slight offset
+            auto selected_ids = m_graph.GetSelectedNodeIds();
+            m_graph.ClearSelection();
+            for (u32 id : selected_ids) {
+                const ShaderNode* src = m_graph.GetNode(id);
+                if (!src) continue;
+                vec2 new_pos = src->position + vec2{20.0f, 20.0f};
+                ShaderNode* copy = m_graph.AddNode(src->type, new_pos);
+                if (copy) {
+                    copy->selected = true;
+                }
+            }
         }
         
         ImGui::Separator();

@@ -144,7 +144,9 @@ DeleteNodeCommand::DeleteNodeCommand(Editor* editor, u64 node_id)
         m_rotation = node->rotation;
         m_scale = node->scale;
         m_color = node->color;
-        // TODO: Store parent ID properly
+        // Store parent ID so Undo can re-attach the node to the right parent
+        EditorNode* parent = m_editor->FindParentOf(m_node_id);
+        if (parent) m_parent_id = parent->id;
     }
 }
 

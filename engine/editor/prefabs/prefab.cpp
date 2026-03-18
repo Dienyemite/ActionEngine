@@ -3,6 +3,7 @@
 #include "core/logging.h"
 #include <fstream>
 #include <sstream>
+#include <filesystem>
 
 namespace action {
 
@@ -273,9 +274,28 @@ void PrefabManager::Clear() {
 }
 
 void PrefabManager::ScanPrefabDirectory() {
-    // TODO: Scan directory for .prefab files and load them
-    // This would use filesystem to iterate over files
     LOG_INFO("Scanning prefab directory: {}", m_prefab_directory);
+    
+    std::error_code ec;
+    if (!std::filesystem::exists(m_prefab_directory, ec)) {
+        LOG_DEBUG("Prefab directory '{}' does not exist, skipping scan", m_prefab_directory);
+        return;
+    }
+    
+    u32 loaded = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(m_prefab_directory, ec)) {
+        if (ec) break;
+        if (!entry.is_regular_file()) continue;
+        const auto& p = entry.path();
+        if (p.extension() != ".prefab") continue;
+        
+        std::string name = p.stem().string();
+        if (LoadPrefab(p.string())) {
+            ++loaded;
+        }
+    }
+    LOG_INFO("Prefab scan complete: {} prefab(s) loaded from '{}'",
+             loaded, m_prefab_directory);
 }
 
 } // namespace action

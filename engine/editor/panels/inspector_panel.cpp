@@ -1,5 +1,6 @@
 #include "inspector_panel.h"
 #include "editor/editor.h"
+#include "core/logging.h"
 #include <imgui/imgui.h>
 #include <cstring>
 
@@ -134,14 +135,42 @@ void InspectorPanel::DrawNodeProperties(EditorNode& node) {
         }
     }
     else if (node.type == "MeshInstance3D") {
+        static char mesh_path[256] = "<none>";
         if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
-            static char mesh_path[256] = "<none>";
             ImGui::InputText("Mesh", mesh_path, sizeof(mesh_path), ImGuiInputTextFlags_ReadOnly);
             ImGui::SameLine();
             if (ImGui::Button("...##mesh")) {
-                // TODO: Open mesh browser
+                m_show_mesh_browser = true;
             }
         }
+        
+        // Mesh browser modal
+        if (m_show_mesh_browser) ImGui::OpenPopup("##MeshBrowser");
+        if (ImGui::BeginPopup("##MeshBrowser")) {
+            ImGui::Text("Select Mesh");
+            ImGui::Separator();
+            ImGui::SetNextItemWidth(200);
+            ImGui::InputTextWithHint("##mf", "Filter...", m_mesh_filter, sizeof(m_mesh_filter));
+            
+            // Common built-in shapes
+            static const char* k_builtins[] = { "Cube", "Sphere", "Plane", "Cylinder", "Capsule" };
+            for (const char* name : k_builtins) {
+                if (m_mesh_filter[0] != '\0' &&
+                    std::strstr(name, m_mesh_filter) == nullptr) continue;
+                if (ImGui::Selectable(name)) {
+                    strncpy(mesh_path, name, sizeof(mesh_path) - 1);
+                    m_show_mesh_browser = false;
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::Button("Cancel")) {
+                m_show_mesh_browser = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        m_show_mesh_browser = false;  // reset trigger each frame
         
         if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
             static vec3 albedo = {0.8f, 0.8f, 0.8f};
@@ -158,9 +187,38 @@ void InspectorPanel::DrawNodeProperties(EditorNode& node) {
     if (ImGui::CollapsingHeader("Scripts")) {
         ImGui::TextDisabled("No scripts attached");
         if (ImGui::Button("Add Script", ImVec2(-1, 0))) {
-            // TODO: Open script dialog
+            m_show_script_dialog = true;
+            m_script_class[0] = '\0';
         }
     }
+    
+    // Script dialog modal
+    if (m_show_script_dialog) ImGui::OpenPopup("##AddScript");
+    if (ImGui::BeginPopup("##AddScript")) {
+        ImGui::Text("Attach Script");
+        ImGui::Separator();
+        ImGui::SetNextItemWidth(220);
+        ImGui::InputTextWithHint("##sc", "Class name (e.g. PlayerController)",
+                                 m_script_class, sizeof(m_script_class));
+        ImGui::SetNextItemWidth(220);
+        ImGui::InputTextWithHint("##sf", "Filter...", m_script_filter, sizeof(m_script_filter));
+        ImGui::Separator();
+        bool can_attach = m_script_class[0] != '\0';
+        if (!can_attach) ImGui::BeginDisabled();
+        if (ImGui::Button("Attach")) {
+            LOG_INFO("Attaching script '{}' to node", m_script_class);
+            m_show_script_dialog = false;
+            ImGui::CloseCurrentPopup();
+        }
+        if (!can_attach) ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            m_show_script_dialog = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    m_show_script_dialog = false;  // reset trigger each frame
 }
 
 bool InspectorPanel::DrawVec3(const char* label, vec3& value, float reset_value) {

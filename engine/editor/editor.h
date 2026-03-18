@@ -105,6 +105,8 @@ public:
     // Node access/modification for commands
     EditorNode* FindNode(u64 node_id);
     EditorNode* FindNode(u64 node_id, EditorNode& root);
+    EditorNode* FindParentOf(u64 node_id);
+    EditorNode* FindParentOf(u64 node_id, EditorNode& root);
     void SetNodeTransform(u64 node_id, const vec3& position, const vec3& rotation, const vec3& scale);
     void SetNodePosition(u64 node_id, const vec3& position);
     void SetNodeRotation(u64 node_id, const vec3& rotation);
@@ -164,6 +166,8 @@ private:
     void DrawSavePrefabPopup();
     void DrawNewProjectPopup();
     void DrawUnsavedChangesPopup();
+    void DrawProjectSettingsDialog();
+    void DrawExportDialog();
     
     // Helper to check for unsaved changes before action
     void PromptSaveBeforeAction(std::function<void()> on_proceed);
@@ -208,6 +212,8 @@ private:
     bool m_show_save_prefab_popup = false;
     bool m_show_new_project_popup = false;
     bool m_show_unsaved_changes_popup = false;
+    bool m_show_project_settings = false;
+    bool m_show_export_dialog = false;
     char m_prefab_name_buffer[128] = "";
     char m_new_project_name[128] = "MyProject";
     char m_new_project_path[512] = "";

@@ -49,6 +49,15 @@ private:
     
     DeleteCallback m_delete_callback;
     u32 m_pending_delete_id = 0;  // Node ID to delete (processed after ImGui frame)
+    
+    // Mesh browser modal state
+    bool   m_show_mesh_browser = false;
+    char   m_mesh_filter[128]  = {};
+    
+    // Script dialog modal state
+    bool   m_show_script_dialog  = false;
+    char   m_script_class[128]   = {};
+    char   m_script_filter[128]  = {};
 };
 
 } // namespace action

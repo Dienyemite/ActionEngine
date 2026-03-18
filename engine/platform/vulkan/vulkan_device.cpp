@@ -169,16 +169,135 @@ void VulkanDevice::DestroyImage(GPUImage& image) {
 
 void VulkanDevice::UploadToBuffer(GPUBuffer& buffer, const void* data, VkDeviceSize size) {
     if (buffer.mapped) {
+        // HOST_VISIBLE: write directly
         memcpy(buffer.mapped, data, size);
+        return;
     }
-    // TODO: Staging buffer for device-local memory
+
+    // DEVICE_LOCAL: go through a transient staging buffer
+    GPUBuffer staging = CreateBuffer(size,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (!staging.buffer) {
+        LOG_ERROR("UploadToBuffer: failed to create staging buffer");
+        return;
+    }
+    memcpy(staging.mapped, data, size);
+
+    VkDevice device = m_context->GetDevice();
+
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo alloc_info{};
+    alloc_info.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc_info.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    alloc_info.commandPool        = m_transfer_pool;
+    alloc_info.commandBufferCount = 1;
+    vkAllocateCommandBuffers(device, &alloc_info, &cmd);
+
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin_info);
+
+    VkBufferCopy region{};
+    region.size = size;
+    vkCmdCopyBuffer(cmd, staging.buffer, buffer.buffer, 1, &region);
+
+    vkEndCommandBuffer(cmd);
+
+    VkQueue queue = m_context->GetTransferQueue();
+    if (queue == VK_NULL_HANDLE) queue = m_context->GetGraphicsQueue();
+
+    VkSubmitInfo submit_info{};
+    submit_info.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers    = &cmd;
+    vkQueueSubmit(queue, 1, &submit_info, VK_NULL_HANDLE);
+    vkQueueWaitIdle(queue);
+
+    vkFreeCommandBuffers(device, m_transfer_pool, 1, &cmd);
+    DestroyBuffer(staging);
 }
 
 void VulkanDevice::UploadToImage(GPUImage& image, const void* data, VkDeviceSize size) {
-    (void)image;
-    (void)data;
-    (void)size;
-    // TODO: Implement staging buffer upload
+    if (!image.image || !data || size == 0) return;
+
+    VkDevice device = m_context->GetDevice();
+
+    // Create staging buffer
+    GPUBuffer staging = CreateBuffer(size,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (!staging.buffer) {
+        LOG_ERROR("UploadToImage: failed to create staging buffer");
+        return;
+    }
+    memcpy(staging.mapped, data, size);
+
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo alloc_info{};
+    alloc_info.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc_info.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    alloc_info.commandPool        = m_transfer_pool;
+    alloc_info.commandBufferCount = 1;
+    vkAllocateCommandBuffers(device, &alloc_info, &cmd);
+
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin_info);
+
+    // UNDEFINED -> TRANSFER_DST_OPTIMAL
+    VkImageMemoryBarrier barrier{};
+    barrier.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout                       = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout                       = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image                           = image.image;
+    barrier.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel   = 0;
+    barrier.subresourceRange.levelCount     = image.mip_levels;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount     = 1;
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    VkBufferImageCopy copy_region{};
+    copy_region.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    copy_region.imageSubresource.mipLevel       = 0;
+    copy_region.imageSubresource.baseArrayLayer = 0;
+    copy_region.imageSubresource.layerCount     = 1;
+    copy_region.imageExtent                     = { image.width, image.height, 1 };
+    vkCmdCopyBufferToImage(cmd, staging.buffer, image.image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
+
+    // TRANSFER_DST_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL
+    barrier.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    vkEndCommandBuffer(cmd);
+
+    VkQueue queue = m_context->GetTransferQueue();
+    if (queue == VK_NULL_HANDLE) queue = m_context->GetGraphicsQueue();
+
+    VkSubmitInfo submit_info{};
+    submit_info.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers    = &cmd;
+    vkQueueSubmit(queue, 1, &submit_info, VK_NULL_HANDLE);
+    vkQueueWaitIdle(queue);
+
+    vkFreeCommandBuffers(device, m_transfer_pool, 1, &cmd);
+    DestroyBuffer(staging);
 }
 
 } // namespace action

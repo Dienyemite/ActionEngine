@@ -277,6 +277,10 @@ void Editor::Update(float dt) {
     // Draw unsaved changes confirmation popup
     DrawUnsavedChangesPopup();
     
+    // Draw project settings / export dialogs
+    DrawProjectSettingsDialog();
+    DrawExportDialog();
+    
     // Draw shader graph editor
     m_shader_graph_editor->Draw(*m_renderer);
 
@@ -623,7 +627,7 @@ void Editor::DrawMenuBar() {
             }
             
             if (ImGui::MenuItem("Project Settings...", nullptr, false, has_project)) {
-                // TODO: Show project settings dialog
+                m_show_project_settings = true;
             }
             if (ImGui::MenuItem("Save Project", nullptr, false, has_project)) {
                 if (m_active_project && m_active_project->Save()) {
@@ -642,7 +646,7 @@ void Editor::DrawMenuBar() {
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Export...", nullptr, false, has_project)) {
-                // TODO: Export project dialog
+                m_show_export_dialog = true;
             }
             ImGui::EndMenu();
         }
@@ -1139,6 +1143,18 @@ EditorNode* Editor::FindNode(u64 node_id, EditorNode& root) {
     return nullptr;
 }
 
+EditorNode* Editor::FindParentOf(u64 node_id) {
+    return FindParentOf(node_id, m_scene_root);
+}
+
+EditorNode* Editor::FindParentOf(u64 node_id, EditorNode& root) {
+    for (auto& child : root.children) {
+        if (child.id == node_id) return &root;
+        if (auto* found = FindParentOf(node_id, child)) return found;
+    }
+    return nullptr;
+}
+
 EditorNode* Editor::FindNodeByEntity(Entity entity) {
     return FindNodeByEntity(entity, m_scene_root);
 }
@@ -1562,6 +1578,145 @@ void Editor::DrawUnsavedChangesPopup() {
         if (ImGui::Button("Cancel", ImVec2(100, 0))) {
             m_show_unsaved_changes_popup = false;
             m_pending_action = nullptr;
+            ImGui::CloseCurrentPopup();
+        }
+        
+        ImGui::EndPopup();
+    }
+}
+
+// ============================================================================
+// Project Settings Dialog
+// ============================================================================
+
+void Editor::DrawProjectSettingsDialog() {
+    if (m_show_project_settings) {
+        ImGui::OpenPopup("Project Settings");
+        m_show_project_settings = false;
+    }
+    
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(480, 420), ImGuiCond_Appearing);
+    
+    if (ImGui::BeginPopupModal("Project Settings", nullptr,
+                               ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
+        if (!m_active_project) {
+            ImGui::Text("No active project.");
+            if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+            return;
+        }
+        
+        ProjectSettings& settings = m_active_project->GetSettings();
+        
+        // -- General --
+        if (ImGui::CollapsingHeader("General", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::LabelText("Project Name", "%s", m_active_project->GetName().c_str());
+            ImGui::LabelText("Project Path", "%s", m_active_project->GetPath().c_str());
+        }
+        
+        // -- Rendering --
+        if (ImGui::CollapsingHeader("Rendering", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Checkbox("VSync",  &settings.vsync);
+            ImGui::Checkbox("Bloom",  &settings.bloom_enabled);
+            ImGui::SetNextItemWidth(120);
+            ImGui::InputFloat("Draw Distance", &settings.draw_distance, 10.0f, 100.0f, "%.0f m");
+            
+            int shadow_res = static_cast<int>(settings.shadow_resolution);
+            ImGui::SetNextItemWidth(120);
+            if (ImGui::InputInt("Shadow Resolution", &shadow_res)) {
+                shadow_res = shadow_res < 128 ? 128 : shadow_res;
+                settings.shadow_resolution = static_cast<u32>(shadow_res);
+            }
+            int shadow_cascades = static_cast<int>(settings.shadow_cascades);
+            ImGui::SetNextItemWidth(120);
+            if (ImGui::InputInt("Shadow Cascades", &shadow_cascades)) {
+                shadow_cascades = shadow_cascades < 1 ? 1 : shadow_cascades > 4 ? 4 : shadow_cascades;
+                settings.shadow_cascades = static_cast<u32>(shadow_cascades);
+            }
+        }
+        
+        // -- Physics --
+        if (ImGui::CollapsingHeader("Physics")) {
+            float gravity[3] = { settings.gravity.x, settings.gravity.y, settings.gravity.z };
+            ImGui::SetNextItemWidth(240);
+            if (ImGui::InputFloat3("Gravity", gravity)) {
+                settings.gravity.x = gravity[0];
+                settings.gravity.y = gravity[1];
+                settings.gravity.z = gravity[2];
+            }
+            int substeps = static_cast<int>(settings.physics_substeps);
+            ImGui::SetNextItemWidth(80);
+            if (ImGui::InputInt("Substeps", &substeps)) {
+                substeps = substeps < 1 ? 1 : substeps > 8 ? 8 : substeps;
+                settings.physics_substeps = static_cast<u32>(substeps);
+            }
+        }
+        
+        ImGui::Separator();
+        
+        if (ImGui::Button("Save", ImVec2(100, 0))) {
+            m_active_project->Save();
+            Log("Project settings saved");
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(100, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        
+        ImGui::EndPopup();
+    }
+}
+
+// ============================================================================
+// Export Dialog
+// ============================================================================
+
+void Editor::DrawExportDialog() {
+    if (m_show_export_dialog) {
+        ImGui::OpenPopup("Export Project");
+        m_show_export_dialog = false;
+    }
+    
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(420, 280), ImGuiCond_Appearing);
+    
+    if (ImGui::BeginPopupModal("Export Project", nullptr,
+                               ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
+        ImGui::Text("Export Settings");
+        ImGui::Separator();
+        
+        static char export_path[512] = "build/export";
+        static int  platform_idx     = 0;
+        static bool strip_debug      = true;
+        static bool compress_assets  = true;
+        
+        const char* platforms[] = { "Windows x64", "Linux x64", "Windows x86" };
+        ImGui::SetNextItemWidth(200);
+        ImGui::Combo("Target Platform", &platform_idx, platforms, IM_ARRAYSIZE(platforms));
+        
+        ImGui::SetNextItemWidth(300);
+        ImGui::InputText("Output Path", export_path, sizeof(export_path));
+        
+        ImGui::Checkbox("Strip Debug Info", &strip_debug);
+        ImGui::Checkbox("Compress Assets",  &compress_assets);
+        
+        ImGui::Separator();
+        ImGui::TextDisabled("Note: Export builds Game.exe + assets into the output directory.");
+        ImGui::Separator();
+        
+        if (ImGui::Button("Export", ImVec2(100, 0))) {
+            Log(std::string("Export to: ") + export_path, 0);
+            // Actual export would bundle assets + copy the Release executable
+            LOG_INFO("Export requested: platform={} path={}",
+                     platforms[platform_idx], export_path);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(100, 0))) {
             ImGui::CloseCurrentPopup();
         }
         

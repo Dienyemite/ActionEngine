@@ -1,10 +1,12 @@
 #include "asset_manager.h"
+#include "asset_importer.h"
 #include "core/logging.h"
 #include "core/profiler.h"
 #include "core/math/math.h"
 #include "platform/vulkan/vulkan_context.h"
 #include <fstream>
 #include <cstring>
+#include <nlohmann/json.hpp>
 
 namespace action {
 
@@ -169,9 +171,32 @@ MaterialHandle AssetManager::LoadMaterial(const std::string& path, float priorit
     handle.index = m_next_material_handle++;
     handle.generation = 1;
     
-    // TODO: Load material data from file
-    m_materials[handle.index] = MaterialData{};
+    MaterialData mat{};
     
+    // Parse a simple JSON material file
+    std::ifstream f(path);
+    if (f.is_open()) {
+        try {
+            auto j = nlohmann::json::parse(f);
+            if (j.contains("base_color")) {
+                auto& c = j["base_color"];
+                mat.base_color = { c[0].get<float>(), c[1].get<float>(),
+                                   c[2].get<float>(), c[3].get<float>() };
+            }
+            if (j.contains("metallic"))  mat.metallic   = j["metallic"].get<float>();
+            if (j.contains("roughness")) mat.roughness  = j["roughness"].get<float>();
+            if (j.contains("diffuse"))   mat.diffuse    = LoadTextureSync(j["diffuse"].get<std::string>());
+            if (j.contains("normal"))    mat.normal     = LoadTextureSync(j["normal"].get<std::string>());
+            if (j.contains("mask"))      mat.mask       = LoadTextureSync(j["mask"].get<std::string>());
+            LOG_INFO("Loaded material: {}", path);
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to parse material '{}': {}", path, e.what());
+        }
+    } else {
+        LOG_DEBUG("Material file not found '{}', using defaults", path);
+    }
+    
+    m_materials[handle.index] = mat;
     return handle;
 }
 
@@ -290,27 +315,152 @@ u32 AssetManager::GetPendingLoadCount() const {
 }
 
 bool AssetManager::LoadMeshFromFile(const std::string& path, MeshData& out_data) {
-    // TODO: Implement actual mesh loading (OBJ, custom format, etc.)
     LOG_DEBUG("Loading mesh: {}", path);
     
-    // Placeholder - create simple quad
-    out_data.vertex_count = 4;
-    out_data.index_count = 6;
-    out_data.triangle_count = 2;
+    // Use AssetImporter (Assimp-backed) to load the mesh
+    AssetImporter importer;
+    importer.Initialize(this);
+    ImportSettings settings;
+    settings.fast_import = true;
+    settings.import_animations = false;
     
+    ImportResult result = importer.Import(path, settings);
+    if (!result.success || result.scene.meshes.empty()) {
+        LOG_WARN("Failed to import mesh '{}': {}", path, result.error_message);
+        // Fall back to 1x1 quad so callers always get a valid handle
+        out_data.vertex_count = 4;
+        out_data.index_count  = 6;
+        out_data.triangle_count = 2;
+        return false;
+    }
+    
+    // Merge all submeshes into one MeshData
+    for (const auto& src : result.scene.meshes) {
+        u32 base_vertex = out_data.vertex_count;
+        out_data.vertices.insert(out_data.vertices.end(), src.vertices.begin(), src.vertices.end());
+        for (u32 idx : src.indices) {
+            out_data.indices.push_back(base_vertex + idx);
+        }
+        out_data.vertex_count  += static_cast<u32>(src.vertices.size());
+        out_data.index_count   += static_cast<u32>(src.indices.size());
+        out_data.triangle_count += static_cast<u32>(src.indices.size() / 3);
+    }
+    out_data.bounds = result.scene.scene_bounds;
+    out_data.name   = path;
+    out_data.PackVertexData();
+    
+    LOG_INFO("Loaded mesh '{}': {} verts, {} tris",
+             path, out_data.vertex_count, out_data.triangle_count);
     return true;
 }
 
 bool AssetManager::LoadTextureFromFile(const std::string& path, TextureData& out_data) {
-    // TODO: Implement actual texture loading (PNG, custom format with BC compression)
     LOG_DEBUG("Loading texture: {}", path);
     
-    // Placeholder
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        LOG_WARN("Texture file not found: {}", path);
+        // 1x1 white fallback so callers always get valid GPU image
+        out_data.width = 1;
+        out_data.height = 1;
+        out_data.mip_levels = 1;
+        out_data.pixel_data = {255, 255, 255, 255};
+        out_data.format = 37;  // VK_FORMAT_R8G8B8A8_UNORM
+        return false;
+    }
+    
+    // Read up to 8 bytes to detect format
+    u8 header[8] = {};
+    file.read(reinterpret_cast<char*>(header), sizeof(header));
+    file.seekg(0);
+    
+    // TGA: no reliable magic — detect by extension
+    bool is_tga = path.size() >= 4 &&
+                  (path.rfind(".tga") == path.size() - 4 ||
+                   path.rfind(".TGA") == path.size() - 4);
+    
+    if (is_tga) {
+        // Minimal TGA loader (uncompressed RGB/RGBA only)
+#pragma pack(push, 1)
+        struct TGAHeader {
+            u8 id_length;
+            u8 colormap_type;
+            u8 image_type;  // 2=RGB, 3=greyscale uncompressed
+            u8 colormap_spec[5];
+            u16 x_origin, y_origin, width, height;
+            u8 pixel_depth;  // 24 or 32
+            u8 descriptor;
+        };
+#pragma pack(pop)
+        TGAHeader tga{};
+        file.read(reinterpret_cast<char*>(&tga), sizeof(tga));
+        file.seekg(tga.id_length, std::ios::cur);
+        
+        if ((tga.image_type == 2 || tga.image_type == 3)
+            && (tga.pixel_depth == 24 || tga.pixel_depth == 32)
+            && tga.width > 0 && tga.height > 0) {
+            
+            out_data.width      = tga.width;
+            out_data.height     = tga.height;
+            out_data.mip_levels = 1;
+            out_data.format     = 37;  // VK_FORMAT_R8G8B8A8_UNORM
+            u32 bpp = tga.pixel_depth / 8;
+            size_t row_bytes = tga.width * bpp;
+            std::vector<u8> raw(tga.height * row_bytes);
+            file.read(reinterpret_cast<char*>(raw.data()),
+                      static_cast<std::streamsize>(raw.size()));
+            
+            out_data.pixel_data.resize(tga.width * tga.height * 4);
+            for (u32 y = 0; y < tga.height; ++y) {
+                // TGA is stored bottom-up by default
+                u32 src_y = (tga.descriptor & 0x20) ? y : (tga.height - 1 - y);
+                for (u32 x = 0; x < tga.width; ++x) {
+                    const u8* src = raw.data() + src_y * row_bytes + x * bpp;
+                    u8* dst = out_data.pixel_data.data() + (y * tga.width + x) * 4;
+                    dst[0] = src[2];  // R (TGA stores BGR)
+                    dst[1] = src[1];  // G
+                    dst[2] = src[0];  // B
+                    dst[3] = (bpp == 4) ? src[3] : 255u;
+                }
+            }
+            LOG_INFO("Loaded TGA '{}': {}x{}", path, out_data.width, out_data.height);
+            return true;
+        }
+    }
+    
+    // PNG: check magic bytes 89 50 4E 47
+    bool is_png = (header[0] == 0x89 && header[1] == 0x50 &&
+                   header[2] == 0x4E && header[3] == 0x47);
+    
+    if (is_png) {
+        // Minimal PNG: read IHDR to get dimensions, then fall back to 1x1
+        // (full inflate/filter pipeline requires zlib which is available via assimp)
+        // For now emit a properly-sized white fallback so the engine doesn't crash,
+        // and log so the developer knows to add a proper image library if needed.
+        file.seekg(16);  // Skip PNG sig(8) + IHDR length(4) + "IHDR"(4)
+        u8 dim[8]{};
+        file.read(reinterpret_cast<char*>(dim), 8);
+        u32 w = (dim[0]<<24)|(dim[1]<<16)|(dim[2]<<8)|dim[3];
+        u32 h = (dim[4]<<24)|(dim[5]<<16)|(dim[6]<<8)|dim[7];
+        if (w == 0 || w > 8192) w = 1;
+        if (h == 0 || h > 8192) h = 1;
+        out_data.width  = w;
+        out_data.height = h;
+        out_data.mip_levels = 1;
+        out_data.format = 37;  // VK_FORMAT_R8G8B8A8_UNORM
+        out_data.pixel_data.assign(w * h * 4, 255u);  // white
+        LOG_WARN("PNG '{}': dimensions {}x{} detected; pixel decode not yet implemented — using white fallback",
+                 path, w, h);
+        return true;
+    }
+    
+    // Unknown format: return 1x1 white fallback
+    LOG_WARN("Unsupported texture format for '{}', using white fallback", path);
     out_data.width = 1;
     out_data.height = 1;
     out_data.mip_levels = 1;
+    out_data.format = 37;
     out_data.pixel_data = {255, 255, 255, 255};
-    
     return true;
 }
 
