@@ -78,8 +78,10 @@ void AnimationSystem::Update(float dt) {
         }
 
         // ------------------------------------------------------------------
-        // 5. Compute skinning matrices
+        // 5. Store local transforms for IK post-processing, then compute
+        //    skinning matrices.
         // ------------------------------------------------------------------
+        player.local_transforms = local_transforms;
         player.skinning_matrices.resize(bone_count);
         skel->ComputeSkinningMatrices(local_transforms, player.skinning_matrices);
 

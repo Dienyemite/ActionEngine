@@ -266,12 +266,16 @@ void JoltPhysics::SyncToPhysics() {
         if (body_interface.GetMotionType(body_id) == JPH::EMotionType::Kinematic) {
             // Activate the body so it can interact with dynamic objects
             body_interface.ActivateBody(body_id);
-            
+
             // Use MoveKinematic instead of SetPosition - this properly pushes dynamic bodies
             // by calculating velocity needed to reach target position
             JPH::RVec3 target_pos = ToJoltR(transform->position);
-            JPH::Quat target_rot = JPH::Quat::sIdentity();  // TODO: Support rotation
-            
+            // Sync rotation from TransformComponent
+            const quat& q = transform->rotation;
+            JPH::Quat target_rot(q.x, q.y, q.z, q.w);
+            if (target_rot.LengthSq() < 1e-6f) target_rot = JPH::Quat::sIdentity();
+            else target_rot = target_rot.Normalized();
+
             body_interface.MoveKinematic(body_id, target_pos, target_rot, FIXED_TIMESTEP);
         }
     }
@@ -293,9 +297,10 @@ void JoltPhysics::SyncFromPhysics() {
         if (body_interface.GetMotionType(body_id) == JPH::EMotionType::Dynamic) {
             JPH::RVec3 pos = body_interface.GetCenterOfMassPosition(body_id);
             transform->position = FromJolt(pos);
-            
-            // Could also sync rotation
-            // JPH::Quat rot = body_interface.GetRotation(body_id);
+
+            // Sync rotation back to ECS transform
+            JPH::Quat rot = body_interface.GetRotation(body_id);
+            transform->rotation = quat{rot.GetX(), rot.GetY(), rot.GetZ(), rot.GetW()};
         }
     }
 }
@@ -358,10 +363,16 @@ JPH::BodyID JoltPhysics::CreateBody(Entity entity, bool is_dynamic) {
     }
     
     // Create body settings
+    // Convert initial rotation from TransformComponent
+    const quat& init_q = transform->rotation;
+    JPH::Quat initial_rot(init_q.x, init_q.y, init_q.z, init_q.w);
+    if (initial_rot.LengthSq() < 1e-6f) initial_rot = JPH::Quat::sIdentity();
+    else initial_rot = initial_rot.Normalized();
+
     JPH::BodyCreationSettings body_settings(
         shape,
         ToJoltR(transform->position),
-        JPH::Quat::sIdentity(),  // TODO: Support rotation
+        initial_rot,
         motion_type,
         layer
     );

@@ -246,21 +246,30 @@ AssetState AssetManager::GetTextureState(TextureHandle handle) const {
 }
 
 void AssetManager::AddRef(MeshHandle handle) {
-    // TODO: Implement reference counting
-    (void)handle;
+    m_mesh_ref_counts[handle.index]++;
 }
 
 void AssetManager::Release(MeshHandle handle) {
-    // TODO: Implement reference counting
-    (void)handle;
+    auto it = m_mesh_ref_counts.find(handle.index);
+    if (it == m_mesh_ref_counts.end()) return;
+    if (it->second > 0) --it->second;
+    // Evict if ref count drops to zero and we are over the memory budget
+    if (it->second == 0 && m_mesh_pool_used > m_config.mesh_pool_size) {
+        EvictLRU(AssetType::Mesh, 0);
+    }
 }
 
 void AssetManager::AddRef(TextureHandle handle) {
-    (void)handle;
+    m_texture_ref_counts[handle.index]++;
 }
 
 void AssetManager::Release(TextureHandle handle) {
-    (void)handle;
+    auto it = m_texture_ref_counts.find(handle.index);
+    if (it == m_texture_ref_counts.end()) return;
+    if (it->second > 0) --it->second;
+    if (it->second == 0 && m_texture_pool_used > m_config.texture_pool_size) {
+        EvictLRU(AssetType::Texture, 0);
+    }
 }
 
 void AssetManager::PreloadAssets(const std::vector<std::string>& paths) {
@@ -432,9 +441,85 @@ bool AssetManager::UploadTexture(TextureHandle handle) {
 }
 
 void AssetManager::EvictLRU(AssetType type, size_t bytes_needed) {
-    // TODO: Implement LRU eviction based on last_access_time
-    (void)type;
-    (void)bytes_needed;
+    if (type == AssetType::Mesh || type == AssetType::Shader) {
+        // Build list of evictable meshes (ref count == 0)
+        std::vector<std::pair<float, u32>> candidates;  // (last_access, index)
+        for (auto& [idx, mesh] : m_meshes) {
+            u32 refs = 0;
+            auto rit = m_mesh_ref_counts.find(idx);
+            if (rit != m_mesh_ref_counts.end()) refs = rit->second;
+            if (refs == 0) {
+                float t = 0.0f;
+                auto tit = m_mesh_last_access.find(idx);
+                if (tit != m_mesh_last_access.end()) t = tit->second;
+                candidates.push_back({t, idx});
+            }
+        }
+        // Sort oldest-first and evict until budget met
+        std::sort(candidates.begin(), candidates.end());
+        for (auto& [t, idx] : candidates) {
+            if (m_vulkan_context) {
+                VkDevice device = m_vulkan_context->GetDevice();
+                auto& mesh = m_meshes[idx];
+                if (mesh.gpu_vertex_buffer) {
+                    vkDestroyBuffer(device, reinterpret_cast<VkBuffer>(mesh.gpu_vertex_buffer), nullptr);
+                    mesh.gpu_vertex_buffer = nullptr;
+                }
+                if (mesh.gpu_vertex_memory) {
+                    vkFreeMemory(device, reinterpret_cast<VkDeviceMemory>(mesh.gpu_vertex_memory), nullptr);
+                    mesh.gpu_vertex_memory = nullptr;
+                }
+                if (mesh.gpu_index_buffer) {
+                    vkDestroyBuffer(device, reinterpret_cast<VkBuffer>(mesh.gpu_index_buffer), nullptr);
+                    mesh.gpu_index_buffer = nullptr;
+                }
+                if (mesh.gpu_index_memory) {
+                    vkFreeMemory(device, reinterpret_cast<VkDeviceMemory>(mesh.gpu_index_memory), nullptr);
+                    mesh.gpu_index_memory = nullptr;
+                }
+            }
+            size_t freed = m_meshes[idx].vertex_data.size() + m_meshes[idx].index_data.size();
+            m_mesh_pool_used -= std::min(m_mesh_pool_used, freed);
+            m_meshes.erase(idx);
+            m_mesh_states[idx] = AssetState::Unloaded;
+            m_mesh_ref_counts.erase(idx);
+            m_mesh_last_access.erase(idx);
+            LOG_DEBUG("AssetManager: evicted mesh {}", idx);
+            if (m_mesh_pool_used + bytes_needed <= m_config.mesh_pool_size) break;
+        }
+    } else if (type == AssetType::Texture) {
+        std::vector<std::pair<float, u32>> candidates;
+        for (auto& [idx, tex] : m_textures) {
+            u32 refs = 0;
+            auto rit = m_texture_ref_counts.find(idx);
+            if (rit != m_texture_ref_counts.end()) refs = rit->second;
+            if (refs == 0) {
+                float t = 0.0f;
+                auto tit = m_texture_last_access.find(idx);
+                if (tit != m_texture_last_access.end()) t = tit->second;
+                candidates.push_back({t, idx});
+            }
+        }
+        std::sort(candidates.begin(), candidates.end());
+        for (auto& [t, idx] : candidates) {
+            if (m_vulkan_context) {
+                VkDevice device = m_vulkan_context->GetDevice();
+                auto& tex = m_textures[idx];
+                if (tex.gpu_image) {
+                    vkDestroyImage(device, reinterpret_cast<VkImage>(tex.gpu_image), nullptr);
+                    tex.gpu_image = nullptr;
+                }
+            }
+            size_t freed = m_textures[idx].pixel_data.size();
+            m_texture_pool_used -= std::min(m_texture_pool_used, freed);
+            m_textures.erase(idx);
+            m_texture_states[idx] = AssetState::Unloaded;
+            m_texture_ref_counts.erase(idx);
+            m_texture_last_access.erase(idx);
+            LOG_DEBUG("AssetManager: evicted texture {}", idx);
+            if (m_texture_pool_used + bytes_needed <= m_config.texture_pool_size) break;
+        }
+    }
 }
 
 // Tightly-packed vertex format for procedural meshes (matches shader layout)

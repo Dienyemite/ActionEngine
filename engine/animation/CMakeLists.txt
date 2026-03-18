@@ -10,6 +10,12 @@ add_library(EngineAnimation STATIC
     skinned_mesh.cpp
     animation_library.h
     animation_library.cpp
+    ik_solver.h
+    ik_solver.cpp
+    blend_tree.h
+    blend_tree.cpp
+    gpu_skinning.h
+    gpu_skinning.cpp
 )
 
 target_include_directories(EngineAnimation PUBLIC

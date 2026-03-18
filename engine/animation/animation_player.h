@@ -40,6 +40,11 @@ struct AnimationPlayerComponent {
     bool        loop         = true;
 
     // Read-only: updated by AnimationSystem each frame.
+    // Per-bone LOCAL transforms (one per bone, in bone's parent space).
+    // Written by AnimationSystem after clip sampling; read+modified by IKSystem
+    // before skinning matrices are recomputed.
+    std::vector<mat4> local_transforms;
+
     // One mat4 per bone: skinning_matrices[i] = world_pose[i] * inv_bind_pose[i].
     // The renderer / CPU skinner reads these.
     std::vector<mat4> skinning_matrices;

@@ -14,18 +14,30 @@ void Physics::Shutdown() {
 }
 
 void Physics::Update(float dt) {
+    // Simple physics integration is handled by the JoltPhysics subsystem.
+    // This legacy Update is intentionally a no-op; call JoltPhysics::Update()
+    // (via the Engine) for full rigid-body simulation.
     (void)dt;
-    // TODO: Physics step
 }
 
 RaycastHit Physics::Raycast(const vec3& origin, const vec3& direction, float max_distance) {
     RaycastHit result;
     result.distance = max_distance;
-    
-    // TODO: Implement actual raycasting against world geometry
-    (void)origin;
-    (void)direction;
-    
+
+    // Test against the default ground plane (y = 0).
+    // For full entity raycasting, use PhysicsWorld::Raycast() which has
+    // the spatial hash and ECS-backed collider queries.
+    const float ground_y = 0.0f;
+    if (std::abs(direction.y) > EPSILON) {
+        float t = (ground_y - origin.y) / direction.y;
+        if (t >= 0.0f && t <= max_distance) {
+            result.hit      = true;
+            result.distance = t;
+            result.point    = origin + direction * t;
+            result.normal   = {0.0f, direction.y < 0.0f ? 1.0f : -1.0f, 0.0f};
+        }
+    }
+
     return result;
 }
 

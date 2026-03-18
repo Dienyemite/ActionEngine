@@ -26,9 +26,23 @@
 #include "scripting/script_system.h"
 #include "physics/physics_world.h"
 #include "physics/character_controller.h"
+#include "physics/climbing.h"
 #include "physics/jolt/jolt_physics.h"
 #include "animation/animation_library.h"
 #include "animation/animation_player.h"
+#include "animation/ik_solver.h"
+#include "animation/blend_tree.h"
+#include "terrain/terrain.h"
+#include "render/post_process.h"
+#include "render/fur.h"
+#include "physics/boss.h"
+#include "physics/mount.h"
+#include "physics/weapon.h"
+#include "audio/audio.h"
+#include "navigation/navmesh.h"
+#include "cinematic/cinematic.h"
+#include "animation/gpu_skinning.h"
+#include "physics/async_physics.h"
 #include "editor/editor.h"
 
 namespace action {
@@ -104,7 +118,23 @@ public:
     PhysicsWorld& GetPhysics() { return *m_physics; }
     JoltPhysics& GetJoltPhysics() { return *m_jolt_physics; }
     CharacterController& GetCharacterController() { return *m_character_controller; }
+    ClimbingSystem&      GetClimbingSystem()  { return *m_climbing_system; }
     AnimationLibrary& GetAnimations() { return *m_animation_library; }
+    IKSystem&         GetIKSystem()        { return *m_ik_system; }
+    BlendTreeSystem&  GetBlendTreeSystem() { return *m_blend_tree_system; }
+    TerrainSystem&    GetTerrain()         { return *m_terrain; }
+    PostProcessSystem& GetPostProcess()    { return *m_post_process_system; }
+    FurSystem&          GetFurSystem()          { return *m_fur_system; }
+    BossSystem&         GetBossSystem()         { return *m_boss_system; }
+    MountSystem&        GetMountSystem()        { return *m_mount_system; }
+    WeaponSystem&       GetWeaponSystem()       { return *m_weapon_system; }
+    ProjectileSystem&   GetProjectileSystem()   { return *m_projectile_system; }
+    AudioSystem&        GetAudioSystem()        { return *m_audio_system; }
+    NavMesh&            GetNavMesh()            { return *m_navmesh; }
+    NavMeshSystem&      GetNavMeshSystem()      { return *m_nav_mesh_system; }
+    CinematicSystem&    GetCinematicSystem()    { return *m_cinematic_system; }
+    GpuSkinningSystem&  GetGpuSkinningSystem()  { return *m_gpu_skinning_system; }
+    AsyncPhysicsSystem& GetAsyncPhysics()       { return *m_async_physics_system; }
     Editor& GetEditor() { return *m_editor; }
     
     // Frame timing
@@ -151,6 +181,22 @@ private:
     std::unique_ptr<PhysicsWorld> m_physics;
     std::unique_ptr<JoltPhysics> m_jolt_physics;
     std::unique_ptr<CharacterController> m_character_controller;
+    ClimbingSystem* m_climbing_system = nullptr;  // owned by ECS
+    IKSystem*         m_ik_system           = nullptr;  // owned by ECS
+    BlendTreeSystem*  m_blend_tree_system   = nullptr;  // owned by ECS
+    PostProcessSystem* m_post_process_system = nullptr; // owned by ECS
+    FurSystem*          m_fur_system              = nullptr;  // ECS-owned
+    BossSystem*         m_boss_system             = nullptr;  // ECS-owned
+    MountSystem*        m_mount_system            = nullptr;  // ECS-owned
+    WeaponSystem*       m_weapon_system           = nullptr;  // ECS-owned
+    ProjectileSystem*   m_projectile_system       = nullptr;  // ECS-owned
+    AudioSystem*        m_audio_system            = nullptr;  // ECS-owned
+    NavMeshSystem*      m_nav_mesh_system         = nullptr;  // ECS-owned
+    CinematicSystem*    m_cinematic_system        = nullptr;  // ECS-owned
+    GpuSkinningSystem*  m_gpu_skinning_system     = nullptr;  // ECS-owned
+    AsyncPhysicsSystem* m_async_physics_system    = nullptr;  // ECS-owned
+    std::unique_ptr<NavMesh> m_navmesh;            // engine-owned NavMesh data
+    std::unique_ptr<TerrainSystem> m_terrain;
     std::unique_ptr<ScriptSystem> m_scripts;
     std::unique_ptr<Editor> m_editor;
     std::unique_ptr<AnimationLibrary> m_animation_library;

@@ -1,6 +1,7 @@
 #include "engine.h"
 #include "core/logging.h"
 #include "core/profiler.h"
+#include "physics/climbing.h"
 #include "scripting/script_system.h"
 #include "scripting/builtin_scripts.h"
 #include <chrono>
@@ -118,7 +119,10 @@ bool Engine::Initialize(const EngineConfig& config) {
     // 8. Character Controller
     m_character_controller = std::make_unique<CharacterController>();
     m_character_controller->Initialize(m_physics.get(), m_ecs.get());
-    
+
+    // 8b. Climbing System (registered as ECS system so it updates automatically)
+    m_climbing_system = m_ecs->AddSystem<ClimbingSystem>(m_ecs.get(), m_physics.get());
+
     // 9. Script System
     m_scripts = std::make_unique<ScriptSystem>();
     m_scripts->Initialize(m_ecs.get(), &m_platform->GetInput(), 
@@ -138,9 +142,59 @@ bool Engine::Initialize(const EngineConfig& config) {
     // 11. Animation system
     m_animation_library = std::make_unique<AnimationLibrary>();
     m_ecs->AddSystem<AnimationSystem>(m_ecs.get(), m_animation_library.get());
+
+    // 11b. BlendTree system — overrides AnimationSystem output for entities
+    //      that use procedural blend trees.
+    m_blend_tree_system = m_ecs->AddSystem<BlendTreeSystem>(m_ecs.get(), m_animation_library.get());
+
+    // 11c. IK system — runs last among animation systems; modifies
+    //      local_transforms and recomputes skinning matrices.
+    m_ik_system = m_ecs->AddSystem<IKSystem>(m_ecs.get(), m_animation_library.get());
+
+    // 11d. PostProcess system — blends PostProcessComponents and pushes
+    //      settings + CPU-side auto-exposure to the renderer each frame.
+    m_post_process_system = m_ecs->AddSystem<PostProcessSystem>(m_ecs.get(), m_renderer.get());
+
+    // 11e. Fur rendering — shell/fin approach; GatherFurShells is called from Render()
+    m_fur_system = m_ecs->AddSystem<FurSystem>(m_ecs.get(), m_renderer.get());
+
+    // 11f. GPU skinning — no-op until skin_compute.spv is present
+    m_gpu_skinning_system = m_ecs->AddSystem<GpuSkinningSystem>(
+        m_ecs.get(), m_animation_library.get(), m_renderer.get());
+
+    // 12b. Boss AI system
+    m_boss_system = m_ecs->AddSystem<BossSystem>(m_ecs.get(), m_physics.get());
+
+    // 12c. Mount / ride system
+    m_mount_system = m_ecs->AddSystem<MountSystem>(m_ecs.get(), m_physics.get());
+
+    // 12d. Weapon + projectile systems
+    m_weapon_system     = m_ecs->AddSystem<WeaponSystem>(m_ecs.get(), m_physics.get());
+    m_projectile_system = m_ecs->AddSystem<ProjectileSystem>(m_ecs.get(), m_physics.get());
+
+    // 12e. Audio system
+    m_audio_system = m_ecs->AddSystem<AudioSystem>(m_ecs.get());
+
+    // 12f. Navigation — NavMesh data struct is engine-owned; NavMeshSystem is ECS-owned
+    m_navmesh        = std::make_unique<NavMesh>();
+    m_nav_mesh_system = m_ecs->AddSystem<NavMeshSystem>(m_ecs.get(), m_navmesh.get());
+
+    // 12g. Cinematic sequencer
+    m_cinematic_system = m_ecs->AddSystem<CinematicSystem>(m_ecs.get(), m_renderer.get());
+
+    // 12h. Async broad-phase physics (DispatchAsync / SyncResults called each frame in Update)
+    m_async_physics_system = m_ecs->AddSystem<AsyncPhysicsSystem>(
+        m_ecs.get(), m_physics.get(), m_jobs.get());
     
     // Pass animation library to editor for hot-reload / reimport
     m_editor->SetAnimationLibrary(m_animation_library.get());
+
+    // 12. Terrain system
+    m_terrain = std::make_unique<TerrainSystem>();
+    m_terrain->Initialize(m_assets.get());
+    // Generate a default procedural terrain; game code may call
+    // GetTerrain().LoadHeightmap() or GenerateProcedural() to override.
+    m_terrain->GenerateProcedural(/*seed=*/42u);
     
     // Set up UI render callback for editor
     m_renderer->SetUIRenderCallback([this](VkCommandBuffer cmd) {
@@ -163,9 +217,12 @@ void Engine::Shutdown() {
     // Physics (Jolt first, then legacy)
     if (m_jolt_physics) m_jolt_physics->Shutdown();
     if (m_physics) m_physics->Shutdown();
+    // NavMesh data (ECS systems that reference it are already shut down above)
+    if (m_navmesh) m_navmesh.reset();
     // AssetManager must shutdown before Renderer (which owns VulkanContext)
     if (m_ecs) m_ecs->Shutdown();
     if (m_animation_library) m_animation_library.reset();
+    if (m_terrain) m_terrain.reset();
     if (m_world) m_world->Shutdown();
     if (m_assets) m_assets->Shutdown();  // Clean up GPU resources first
     if (m_renderer) m_renderer->Shutdown();  // Then destroy Vulkan context
@@ -451,6 +508,9 @@ void Engine::Update(float dt) {
         PROFILE_SCOPE("ECS::Update");
         m_ecs->Update(dt);
     }
+
+    // Update terrain (processes any pending async work)
+    if (m_terrain) m_terrain->Update(dt);
     
     // Update physics (spatial hash, character controllers, Jolt simulation)
     {
@@ -489,6 +549,12 @@ void Engine::Render() {
     {
         PROFILE_SCOPE("GatherRenderables");
         m_world->GatherVisibleObjects(m_renderer->GetCamera(), render_list);
+        // Add terrain chunks to the same render list.
+        if (m_terrain)
+            m_terrain->GatherVisibleChunks(m_renderer->GetCamera(), render_list);
+        // Add fur shells for all FurComponent entities.
+        if (m_fur_system)
+            m_fur_system->GatherFurShells(m_renderer->GetCamera(), render_list);
     }
     
     // Submit to renderer

@@ -2,6 +2,7 @@
 #include "core/logging.h"
 #include "core/profiler.h"
 #include <algorithm>
+#include <fstream>
 
 namespace action {
 
@@ -170,9 +171,28 @@ Chunk* WorldManager::LoadChunk(ChunkCoord coord) {
     vec3 min_pos = ChunkToWorld(coord);
     vec3 max_pos = min_pos + vec3(m_config.chunk_size, 1000.0f, m_config.chunk_size);
     chunk.bounds = AABB(min_pos, max_pos);
-    
-    // TODO: Load chunk data from disk asynchronously
-    // For now, mark as loaded immediately
+
+    // Attempt to load saved chunk data from disk
+    std::string chunk_path = "chunks/" + std::to_string(coord.x) +
+                             "_" + std::to_string(coord.z) + ".chunk";
+    std::ifstream file(chunk_path, std::ios::binary);
+    if (file.is_open()) {
+        // Binary format: [u32 object_count] [WorldObject...]
+        u32 count = 0;
+        file.read(reinterpret_cast<char*>(&count), sizeof(count));
+        chunk.objects.resize(count);
+        for (auto& obj : chunk.objects) {
+            file.read(reinterpret_cast<char*>(&obj.position),   sizeof(obj.position));
+            file.read(reinterpret_cast<char*>(&obj.bounds),     sizeof(obj.bounds));
+            file.read(reinterpret_cast<char*>(&obj.color),      sizeof(obj.color));
+            file.read(reinterpret_cast<char*>(&obj.lod_level),  sizeof(obj.lod_level));
+            file.read(reinterpret_cast<char*>(&obj.visible),    sizeof(obj.visible));
+        }
+        LOG_DEBUG("WorldManager: loaded chunk ({},{}) from disk ({} objects)",
+                  coord.x, coord.z, count);
+    }
+    // If no file exists the chunk starts empty (procedural fill handled by caller)
+
     chunk.state = ChunkState::Loaded;
     chunk.last_access_time = m_time;
     
@@ -188,13 +208,34 @@ void WorldManager::UnloadChunk(ChunkCoord coord) {
     if (it == m_chunks.end()) return;
     
     Chunk& chunk = it->second;
-    
+
     // Remove entities from index
     for (Entity entity : chunk.entities) {
         m_entity_to_chunk.erase(entity);
     }
-    
-    // TODO: Save modified chunk data
+
+    // Persist modified chunk data to disk
+    if (!chunk.objects.empty()) {
+        std::string chunk_path = "chunks/" + std::to_string(coord.x) +
+                                 "_" + std::to_string(coord.z) + ".chunk";
+        std::ofstream file(chunk_path, std::ios::binary | std::ios::trunc);
+        if (file.is_open()) {
+            u32 count = static_cast<u32>(chunk.objects.size());
+            file.write(reinterpret_cast<const char*>(&count), sizeof(count));
+            for (const auto& obj : chunk.objects) {
+                file.write(reinterpret_cast<const char*>(&obj.position),  sizeof(obj.position));
+                file.write(reinterpret_cast<const char*>(&obj.bounds),    sizeof(obj.bounds));
+                file.write(reinterpret_cast<const char*>(&obj.color),     sizeof(obj.color));
+                file.write(reinterpret_cast<const char*>(&obj.lod_level), sizeof(obj.lod_level));
+                file.write(reinterpret_cast<const char*>(&obj.visible),   sizeof(obj.visible));
+            }
+            LOG_DEBUG("WorldManager: saved chunk ({},{}) to disk ({} objects)",
+                      coord.x, coord.z, count);
+        } else {
+            LOG_WARN("WorldManager: could not save chunk ({},{}) - directory may not exist",
+                     coord.x, coord.z);
+        }
+    }
     
     m_memory_usage -= chunk.memory_usage;
     m_chunks.erase(it);

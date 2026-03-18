@@ -4,6 +4,7 @@
 #include "core/math/math.h"
 #include "platform/vulkan/vulkan_context.h"
 #include "platform/vulkan/vulkan_swapchain.h"
+#include "post_process.h"
 #include <vector>
 #include <functional>
 
@@ -151,6 +152,14 @@ public:
     // Anti-aliasing
     void SetFXAAEnabled(bool enabled) { m_fxaa_enabled = enabled; }
     bool IsFXAAEnabled() const { return m_fxaa_enabled; }
+
+    // Post-processing
+    void SetPostProcessSettings(const PostProcessSettings& s) { m_post_process_settings = s; }
+    const PostProcessSettings& GetPostProcessSettings() const { return m_post_process_settings; }
+    float GetCurrentExposure() const { return m_current_exposure; }
+
+    // Advance CPU-side eye adaptation (call once per frame with delta time)
+    void UpdatePostProcess(float dt);
     
     // Resize handling
     void OnResize(u32 width, u32 height);
@@ -293,7 +302,13 @@ private:
     
     // UI render callback (for editor ImGui rendering)
     RenderCallback m_ui_render_callback;
-    
+
+    // Post-process
+    PostProcessSettings m_post_process_settings;
+    float m_current_exposure = 1.0f;    // CPU eye-adaptation result (EMA)
+    vec3  m_prev_camera_pos  = {};      // For motion-vector estimation
+    mat4  m_prev_view_proj   = {};      // Previous frame view-projection
+
     // Stats
     struct RenderStats {
         u32 draw_calls = 0;

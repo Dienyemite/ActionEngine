@@ -39,6 +39,9 @@ add_subdirectory(engine/physics)
 add_subdirectory(engine/audio)
 add_subdirectory(engine/gameplay)
 add_subdirectory(engine/animation)
+add_subdirectory(engine/navigation)
+add_subdirectory(engine/cinematic)
+add_subdirectory(engine/terrain)
 add_subdirectory(engine/scripting)
 add_subdirectory(engine/serialization)
 add_subdirectory(engine/editor)
@@ -64,6 +67,9 @@ target_link_libraries(ActionEngine PUBLIC
     EngineAudio
     EngineGameplay
     EngineAnimation
+    EngineTerrain
+    EngineNavigation
+    EngineCinematic
     EngineScripting
     EngineEditor
     EngineProject

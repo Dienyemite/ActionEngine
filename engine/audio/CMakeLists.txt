@@ -9,4 +9,5 @@ target_include_directories(EngineAudio PUBLIC
 
 target_link_libraries(EngineAudio PUBLIC
     EngineCore
+    EngineGameplay
 )

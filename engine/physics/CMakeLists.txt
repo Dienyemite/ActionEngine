@@ -6,6 +6,16 @@ add_library(EnginePhysics STATIC
     physics_world.cpp
     character_controller.h
     character_controller.cpp
+    climbing.h
+    climbing.cpp
+    boss.h
+    boss.cpp
+    mount.h
+    mount.cpp
+    weapon.h
+    weapon.cpp
+    async_physics.h
+    async_physics.cpp
     jolt/jolt_physics.h
     jolt/jolt_physics.cpp
     jolt/jolt_layers.h

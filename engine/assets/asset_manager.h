@@ -236,6 +236,13 @@ private:
     u32 m_next_texture_handle = 1;
     u32 m_next_material_handle = 1;
     
+    // Reference counts and LRU access times (handle index → value)
+    std::unordered_map<u32, u32>   m_mesh_ref_counts;
+    std::unordered_map<u32, float> m_mesh_last_access;
+    std::unordered_map<u32, u32>   m_texture_ref_counts;
+    std::unordered_map<u32, float> m_texture_last_access;
+    float m_time = 0.0f;  // Accumulated frame time for LRU timestamps
+
     // Memory tracking
     size_t m_texture_pool_used = 0;
     size_t m_mesh_pool_used = 0;
