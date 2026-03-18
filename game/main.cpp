@@ -321,7 +321,189 @@ physics.AddCollider(step);
         LOG_INFO("==============================================");
         engine.GetEditor().SetPlayMode(false);
     }
-    
+
+    // ========================================
+    // DEMO SCENE: Boss + Mount + NavMesh + Audio + Cinematic
+    // ========================================
+    constexpr bool CREATE_DEMO_SCENE = true;
+    if (CREATE_DEMO_SCENE) {
+        AudioSystem&    audio    = engine.GetAudioSystem();
+        NavMesh&        navmesh  = engine.GetNavMesh();
+        TerrainSystem&  terrain  = engine.GetTerrain();
+        BossSystem&     bossSys  = engine.GetBossSystem();
+        NavMeshSystem&  navSys   = engine.GetNavMeshSystem();
+        CinematicSystem& cinSys  = engine.GetCinematicSystem();
+
+        // --- 1. Audio: load clips and start music ---
+        audio.LoadClip("music_main",  "assets/audio/main_theme.ogg",    180.0f, true,  SoundCategory::Music);
+        audio.LoadClip("sfx_sword",   "assets/audio/sword_swing.wav",   0.5f,  false, SoundCategory::SFX);
+        audio.LoadClip("sfx_gallop",  "assets/audio/horse_gallop.wav",  2.0f,  true,  SoundCategory::SFX);
+        audio.LoadClip("sfx_roar",    "assets/audio/boss_roar.wav",     3.0f,  false, SoundCategory::SFX);
+        audio.PlayMusic("music_main", 2.0f);
+
+        // --- 2. Build navmesh from terrain height ---
+        navmesh.Build(-200.0f, -200.0f, 200.0f, 200.0f, 2.0f, 40.0f,
+            [&terrain](float x, float z) { return terrain.GetHeightAt(x, z); });
+
+        // --- 3. Create player entity (needed before boss targeting) ---
+        Entity player = ecs.CreateEntity();
+        ecs.SetPlayerEntity(player);
+        {
+            auto& tc = ecs.AddComponent<TransformComponent>(player);
+            tc.position = {0.0f, 0.0f, -10.0f};
+            auto& tag = ecs.AddComponent<TagComponent>(player);
+            tag.name = "Player";
+            tag.tags = Tags::Player | Tags::Dynamic;
+            auto& rc = ecs.AddComponent<RenderComponent>(player);
+            rc.mesh = cube_mesh; rc.material = default_material; rc.visible = true;
+            auto& cc = ecs.AddComponent<ColliderComponent>(player);
+            cc.type = ColliderType::Capsule; cc.radius = 0.4f; cc.height = 1.8f;
+            cc.layer = CollisionLayer::Player;
+            cc.mask  = CollisionLayer::Environment | CollisionLayer::Enemy;
+            // Give player a sword
+            auto& wc = ecs.AddComponent<WeaponComponent>(player);
+            wc.name = "Iron Sword";
+            wc.owner = player;
+            wc.config.type = WeaponType::Melee;
+            wc.config.damage = 35.0f;
+            wc.config.attack_range = 2.5f;
+            wc.config.attack_speed = 1.5f;
+        }
+        bossSys.SetPlayerEntity(player);
+
+        // --- 4. Boss entity (Giant Troll) ---
+        Entity boss_ent = ecs.CreateEntity();
+        {
+            auto& tc = ecs.AddComponent<TransformComponent>(boss_ent);
+            tc.position = {30.0f, 0.0f, 50.0f};
+            auto& tag = ecs.AddComponent<TagComponent>(boss_ent);
+            tag.name = "GiantTroll";
+            tag.tags = Tags::Enemy;
+            auto& rc = ecs.AddComponent<RenderComponent>(boss_ent);
+            rc.mesh = cube_mesh; rc.material = default_material; rc.visible = true;
+            auto& bc = ecs.AddComponent<BossComponent>(boss_ent);
+            bc.name = "Giant Troll";
+            bc.max_health = bc.current_health = 5000.0f;
+            bc.aggro_range = 80.0f;
+            bc.phase2_threshold = 0.65f;
+            bc.phase3_threshold = 0.30f;
+            bc.on_phase_change = [](BossPhase p) {
+                LOG_INFO("Boss entered phase {}", static_cast<int>(p));
+            };
+            bc.on_defeated = [&audio]() {
+                LOG_INFO("Boss defeated!");
+                audio.PlayOneShot("sfx_roar", {30.0f, 0.0f, 50.0f}, 0.8f);
+            };
+            // Hitboxes
+            bc.hitboxes.push_back({"head",  {{0.0f, 3.0f, 0.0f}, 0.8f}, 1.0f, true,  true});
+            bc.hitboxes.push_back({"chest", {{0.0f, 1.5f, 0.0f}, 1.2f}, 1.0f, false, true});
+            bc.hitboxes.push_back({"leg_l", {{-0.7f, 0.5f, 0.0f}, 0.5f}, 0.8f, false, true});
+            bc.hitboxes.push_back({"leg_r", {{ 0.7f, 0.5f, 0.0f}, 0.5f}, 0.8f, false, true});
+            bc.attack_timers.resize(4, 0.0f);
+            // Attacks
+            BossAttackDef stomp;
+            stomp.type = BossAttackType::Stomp; stomp.damage = 80.0f;
+            stomp.range = 4.0f; stomp.cooldown = 5.0f; stomp.min_phase = 0;
+            bc.attacks.push_back(stomp);
+            BossAttackDef sweep;
+            sweep.type = BossAttackType::Sweep; sweep.damage = 60.0f;
+            sweep.range = 6.0f; sweep.cooldown = 8.0f; sweep.min_phase = 0;
+            bc.attacks.push_back(sweep);
+            BossAttackDef charge;
+            charge.type = BossAttackType::Charge; charge.damage = 120.0f;
+            charge.range = 15.0f; charge.cooldown = 12.0f; charge.min_phase = 1;
+            bc.attacks.push_back(charge);
+            BossAttackDef roar;
+            roar.type = BossAttackType::Roar; roar.damage = 0.0f;
+            roar.range = 20.0f; roar.cooldown = 20.0f; roar.min_phase = 2;
+            bc.attacks.push_back(roar);
+            // Collider for damage registration
+            auto& col = ecs.AddComponent<ColliderComponent>(boss_ent);
+            col.type = ColliderType::Capsule; col.radius = 1.5f; col.height = 4.0f;
+            col.layer = CollisionLayer::Enemy;
+            col.mask  = CollisionLayer::Player | CollisionLayer::Projectile;
+            physics.AddCollider(boss_ent);
+        }
+        LOG_INFO("Demo: Boss 'Giant Troll' created at (30,0,50)");
+
+        // --- 5. Mount (Horse) ---
+        Entity horse = ecs.CreateEntity();
+        {
+            auto& tc = ecs.AddComponent<TransformComponent>(horse);
+            tc.position = {-20.0f, 0.0f, 10.0f};
+            auto& tag = ecs.AddComponent<TagComponent>(horse);
+            tag.name = "Horse";
+            auto& rc = ecs.AddComponent<RenderComponent>(horse);
+            rc.mesh = cube_mesh; rc.material = default_material; rc.visible = true;
+            auto& mc = ecs.AddComponent<MountableComponent>(horse);
+            mc.type = MountType::Horse;
+            mc.max_speed = 12.0f;
+            mc.acceleration = 8.0f;
+            mc.rider_seat_offset = {0.0f, 1.5f, 0.0f};
+            auto& sc = ecs.AddComponent<SoundComponent>(horse);
+            sc.clip_name = "sfx_gallop"; sc.spatial = true; sc.loop = true; sc.play_on_start = false;
+        }
+        LOG_INFO("Demo: Horse mount created at (-20,0,10)");
+
+        // --- 6. Patrol enemy with NavAgent ---
+        Entity patrol = ecs.CreateEntity();
+        {
+            auto& tc = ecs.AddComponent<TransformComponent>(patrol);
+            tc.position = {10.0f, 0.0f, 20.0f};
+            auto& tag = ecs.AddComponent<TagComponent>(patrol);
+            tag.name = "PatrolGuard";
+            tag.tags = Tags::Enemy;
+            auto& rc = ecs.AddComponent<RenderComponent>(patrol);
+            rc.mesh = cube_mesh; rc.material = default_material; rc.visible = true;
+            auto& col = ecs.AddComponent<ColliderComponent>(patrol);
+            col.type = ColliderType::Capsule; col.radius = 0.4f; col.height = 1.8f;
+            col.layer = CollisionLayer::Enemy;
+            col.mask  = CollisionLayer::Player | CollisionLayer::Environment;
+            auto& nav = ecs.AddComponent<NavAgentComponent>(patrol);
+            nav.speed = 4.0f;
+            nav.arrival_radius = 1.0f;
+            nav.path_recalc_period = 2.0f;
+            navSys.SetDestination(patrol, {-10.0f, 0.0f, -20.0f});
+        }
+        LOG_INFO("Demo: Patrol guard created, navigating to (-10,0,-20)");
+
+        // --- 7. Cinematic intro sequence ---
+        Entity cinematic_ent = ecs.CreateEntity();
+        {
+            auto& tag = ecs.AddComponent<TagComponent>(cinematic_ent);
+            tag.name = "IntroSequence";
+            auto& cc = ecs.AddComponent<CinematicComponent>(cinematic_ent);
+            cc.clip.name         = "intro";
+            cc.clip.duration     = 8.0f;
+            cc.clip.skip_allowed = true;
+            // Camera sweep from far to close-up on boss
+            cc.clip.camera_track.push_back({0.0f, {0.0f,  15.0f, -30.0f}, {0.0f,  0.0f, 50.0f}, 40.0f, 1.0f});
+            cc.clip.camera_track.push_back({4.0f, {20.0f,  8.0f,  10.0f}, {30.0f, 2.0f, 50.0f}, 60.0f, 2.0f});
+            cc.clip.camera_track.push_back({8.0f, {0.0f,   5.0f, -15.0f}, {0.0f,  0.0f,  0.0f}, 75.0f, 1.0f});
+            // Dialogue
+            cc.clip.dialogue.push_back({1.0f, 4.0f, "The Troll awakens from its slumber...", "Narrator"});
+            cc.clip.dialogue.push_back({5.0f, 8.0f, "Prepare yourself, warrior.", "Narrator"});
+            cc.clip.on_end = [&engine]() {
+                engine.GetEditor().SetPlayMode(true);
+                LOG_INFO("Cinematic done — entering play mode");
+            };
+            cinSys.PlayCinematic(cinematic_ent);
+        }
+        LOG_INFO("Demo: Intro cinematic playing (8s)");
+
+        // Aim camera at the action during cinematic
+        camera.position = {0.0f, 15.0f, -30.0f};
+        camera.forward = normalize(vec3{0.0f, -0.3f, 1.0f});
+
+        LOG_INFO("==============================================");
+        LOG_INFO("DEMO SCENE LOADED");
+        LOG_INFO("  Boss: Giant Troll at (30,0,50)");
+        LOG_INFO("  Mount: Horse at (-20,0,10)");
+        LOG_INFO("  NavAgent patrol: (10,0,20) -> (-10,0,-20)");
+        LOG_INFO("  Cinematic intro: 8 seconds");
+        LOG_INFO("==============================================");
+    }
+
     // Run engine
     engine.Run();
     

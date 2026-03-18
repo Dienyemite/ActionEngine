@@ -1,4 +1,6 @@
 #include "weapon.h"
+#include "physics_world.h"
+#include "boss.h"
 #include "core/logging.h"
 #include "core/math/math.h"
 
@@ -51,12 +53,29 @@ Entity WeaponSystem::FireProjectile(Entity owner_entity, const vec3& origin, con
 }
 
 void WeaponSystem::ProcessMelee(Entity entity, WeaponComponent& wc) {
-    // Broad-phase melee: OverlapSphere within attack_range
-    // Full implementation depends on having a world-position component.
-    // Calls PhysicsWorld::OverlapSphere once a position source is available.
-    wc.attack_active = 0.15f; // short hit-window
+    wc.attack_active = 0.15f;
     wc.is_attacking  = true;
-    LOG_INFO("Entity {} melee attack '{}' (range={:.2f})", entity, wc.name, wc.config.attack_range);
+
+    Entity owner = (wc.owner != INVALID_ENTITY) ? wc.owner : entity;
+    auto* owner_tc = m_ecs->GetComponent<TransformComponent>(owner);
+    if (!owner_tc) {
+        LOG_INFO("Entity {} melee attack '{}' (no transform)", entity, wc.name);
+        return;
+    }
+
+    auto hits = m_physics->OverlapSphere(owner_tc->position, wc.config.attack_range,
+                                          CollisionLayer::Enemy);
+    u32 hit_count = 0;
+    for (Entity hit : hits) {
+        if (auto* boss = m_ecs->GetComponent<BossComponent>(hit)) {
+            if (boss->IsAlive()) {
+                boss->TakeDamage(wc.config.damage);
+                LOG_INFO("Melee '{}' hit boss '{}' for {:.1f} dmg", wc.name, boss->name, wc.config.damage);
+                ++hit_count;
+            }
+        }
+    }
+    LOG_INFO("Entity {} melee attack '{}' hit {} target(s)", entity, wc.name, hit_count);
 }
 
 void WeaponSystem::Update(float dt) {
@@ -107,8 +126,25 @@ void ProjectileSystem::Update(float dt) {
         if (pc.gravity_enabled)
             pc.velocity.y -= GRAVITY * pc.gravity_scale * dt;
 
-        // Movement is stored in velocity; actual position update requires a PositionComponent.
-        // Full impl: pos += pc.velocity * dt; SphereCast for hit detection.
+        auto* tc = m_ecs->GetComponent<TransformComponent>(e);
+        if (!tc) return;
+
+        tc->position.x += pc.velocity.x * dt;
+        tc->position.y += pc.velocity.y * dt;
+        tc->position.z += pc.velocity.z * dt;
+
+        if (tc->position.y < -50.0f) { to_destroy.push_back(e); return; }
+
+        auto hits = m_physics->OverlapSphere(tc->position, pc.radius,
+                                              CollisionLayer::Enemy);
+        if (!hits.empty()) {
+            for (Entity hit : hits) {
+                if (auto* boss = m_ecs->GetComponent<BossComponent>(hit)) {
+                    if (boss->IsAlive()) boss->TakeDamage(pc.damage);
+                }
+            }
+            if (!pc.piercing) { to_destroy.push_back(e); return; }
+        }
     });
 
     for (Entity e : to_destroy)

@@ -1,4 +1,5 @@
 #include "mount.h"
+#include "physics_world.h"
 #include "core/logging.h"
 #include "core/math/math.h"
 
@@ -80,9 +81,19 @@ void MountSystem::UpdateMountPhysics(Entity /*mount_entity*/, MountableComponent
 }
 
 void MountSystem::SyncRiderTransform(Entity rider, Entity mount_entity, const MountableComponent& mc) {
-    (void)rider; (void)mount_entity; (void)mc;
-    // Full implementation would set rider's transform = mount_transform * rider_seat_offset.
-    // Stubbed until a universal TransformComponent is available.
+    auto* mount_tc = m_ecs->GetComponent<TransformComponent>(mount_entity);
+    auto* rider_tc = m_ecs->GetComponent<TransformComponent>(rider);
+    if (!mount_tc || !rider_tc) return;
+
+    // Rotate the seat offset by the mount's orientation (quaternion × vec3)
+    vec3 world_offset = mount_tc->rotation * mc.rider_seat_offset;
+
+    rider_tc->position = {
+        mount_tc->position.x + world_offset.x,
+        mount_tc->position.y + world_offset.y,
+        mount_tc->position.z + world_offset.z
+    };
+    rider_tc->rotation = mount_tc->rotation;
 }
 
 void MountSystem::Update(float dt) {
@@ -95,6 +106,21 @@ void MountSystem::Update(float dt) {
     // Update mounted physics
     m_ecs->ForEach<MountableComponent>([&](Entity e, MountableComponent& mc) {
         UpdateMountPhysics(e, mc, dt);
+
+        // Apply velocity to world position via TransformComponent
+        if (auto* tc = m_ecs->GetComponent<TransformComponent>(e)) {
+            tc->position.x += mc.current_velocity.x * dt;
+            tc->position.y += mc.current_velocity.y * dt;
+            tc->position.z += mc.current_velocity.z * dt;
+
+            // Simple ground clamp — real impl uses PhysicsWorld raycast
+            if (tc->position.y < 0.0f) {
+                tc->position.y = 0.0f;
+                mc.current_velocity.y = 0.0f;
+                mc.is_grounded = true;
+            }
+        }
+
         if (mc.occupied && mc.rider != INVALID_ENTITY)
             SyncRiderTransform(mc.rider, e, mc);
     });

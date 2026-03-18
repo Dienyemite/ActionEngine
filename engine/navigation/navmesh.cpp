@@ -206,8 +206,11 @@ void NavMeshSystem::Stop(Entity entity) {
     ag->current_path    = {};
 }
 
-void NavMeshSystem::SteerAgent(Entity /*entity*/, NavAgentComponent& ag, float dt) {
+void NavMeshSystem::SteerAgent(Entity entity, NavAgentComponent& ag, float dt) {
     if (!ag.has_destination || ag.arrived) return;
+
+    auto* tc = m_ecs->GetComponent<TransformComponent>(entity);
+    if (!tc) return;
 
     ag.recalc_timer -= dt;
     bool needs_recalc = ag.recalc_timer <= 0.0f
@@ -215,11 +218,10 @@ void NavMeshSystem::SteerAgent(Entity /*entity*/, NavAgentComponent& ag, float d
                      || ag.current_waypoint >= static_cast<u32>(ag.current_path.waypoints.size());
 
     if (needs_recalc) {
-        // Position unknown without TransformComponent; path computed from SnapToNavMesh
-        vec3 approx_pos = m_navmesh->SnapToNavMesh(ag.destination); // Placeholder
-        ag.current_path      = m_navmesh->FindPath(approx_pos, ag.destination);
+        ag.current_path      = m_navmesh->FindPath(tc->position, ag.destination);
         ag.current_waypoint  = 0;
         ag.recalc_timer      = ag.path_recalc_period;
+        ag.arrived           = false;
     }
 
     if (!ag.current_path.valid) return;
@@ -228,17 +230,23 @@ void NavMeshSystem::SteerAgent(Entity /*entity*/, NavAgentComponent& ag, float d
         return;
     }
 
-    // Arrival check is based on 2D XZ distance to current waypoint
     const vec3& wp = ag.current_path.waypoints[ag.current_waypoint];
-    float dx = wp.x - ag.destination.x;  // Approximate — real impl uses entity pos
-    float dz = wp.z - ag.destination.z;
-    float dist = std::sqrt(dx*dx + dz*dz);
+    float dx   = wp.x - tc->position.x;
+    float dz   = wp.z - tc->position.z;
+    float dist = std::sqrt(dx * dx + dz * dz);
+
     if (dist < ag.arrival_radius) {
         ++ag.current_waypoint;
         if (ag.current_waypoint >= static_cast<u32>(ag.current_path.waypoints.size()))
             ag.arrived = true;
+        return;
     }
-    // Entity movement is applied by game code reading current_path.waypoints[current_waypoint]
+
+    float inv_dist = 1.0f / dist;
+    float move     = std::min(ag.speed * dt, dist);
+    tc->position.x += dx * inv_dist * move;
+    tc->position.z += dz * inv_dist * move;
+    tc->position.y  = wp.y;  // snap height to navmesh surface
 }
 
 void NavMeshSystem::Update(float dt) {
