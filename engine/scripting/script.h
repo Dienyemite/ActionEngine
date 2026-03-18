@@ -154,18 +154,19 @@ protected:
     friend class ScriptSystem;
     
     // Set by ScriptSystem when attaching
-    void SetContext(Entity entity, ECS* ecs, Input* input, 
+    void SetContext(Entity entity, ECS* ecs, Input* input,
                     AssetManager* assets, WorldManager* world, Renderer* renderer,
-                    PhysicsWorld* physics) {
-        m_entity = entity;
-        m_ecs = ecs;
-        m_input = input;
-        m_assets = assets;
-        m_world = world;
-        m_renderer = renderer;
-        m_physics = physics;
+                    PhysicsWorld* physics, ScriptSystem* script_system = nullptr) {
+        m_entity       = entity;
+        m_ecs          = ecs;
+        m_input        = input;
+        m_assets       = assets;
+        m_world        = world;
+        m_renderer     = renderer;
+        m_physics      = physics;
+        m_script_system = script_system;
     }
-    
+
     Entity m_entity = INVALID_ENTITY;
     ECS* m_ecs = nullptr;
     Input* m_input = nullptr;
@@ -173,6 +174,7 @@ protected:
     WorldManager* m_world = nullptr;
     Renderer* m_renderer = nullptr;
     PhysicsWorld* m_physics = nullptr;
+    ScriptSystem* m_script_system = nullptr;
     
     bool m_enabled = true;
     bool m_started = false;

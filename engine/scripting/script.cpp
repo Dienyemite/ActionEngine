@@ -1,4 +1,5 @@
 #include "script.h"
+#include "scripting/script_system.h"
 #include "core/logging.h"
 #include "gameplay/ecs/ecs.h"
 #include "physics/physics_world.h"
@@ -121,17 +122,24 @@ void Script::LogError(const std::string& message) {
 }
 
 Entity Script::Instantiate(const std::string& prefab_name, const vec3& position) {
-    // TODO: Integrate with PrefabManager
-    LOG_WARN("Script::Instantiate not yet implemented");
-    return INVALID_ENTITY;
+    if (!m_ecs) return INVALID_ENTITY;
+    Entity entity = m_ecs->CreateEntity();
+    auto& transform = m_ecs->AddComponent<TransformComponent>(entity);
+    transform.position = position;
+    auto& tag = m_ecs->AddComponent<TagComponent>(entity);
+    tag.name = prefab_name;
+    LOG_DEBUG("Script::Instantiate spawned entity '{}' at ({},{},{})",
+              prefab_name, position.x, position.y, position.z);
+    return entity;
 }
 
 void Script::Destroy(Entity entity, float delay) {
     if (delay <= 0.0f) {
         m_ecs->DestroyEntity(entity);
+    } else if (m_script_system) {
+        m_script_system->QueueDelayedDestroy(entity, delay);
     } else {
-        // TODO: Queue delayed destruction
-        LOG_WARN("Delayed destruction not yet implemented");
+        // Fallback: immediate destroy when no script system reference
         m_ecs->DestroyEntity(entity);
     }
 }

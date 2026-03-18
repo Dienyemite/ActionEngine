@@ -134,7 +134,7 @@ public:
         T* ptr = script.get();
         
         // Set context
-        script->SetContext(entity, m_ecs, m_input, m_assets, m_world, m_renderer, m_physics);
+        script->SetContext(entity, m_ecs, m_input, m_assets, m_world, m_renderer, m_physics, this);
         script->OnCreate();
         
         comp->scripts.push_back(std::move(script));
@@ -162,7 +162,12 @@ public:
     
     // Get script by type name
     Script* GetScript(Entity entity, const std::string& type_name);
-    
+
+    // Queue an entity for destruction after `delay` seconds
+    void QueueDelayedDestroy(Entity entity, float delay) {
+        m_destroy_queue.push_back({entity, delay});
+    }
+
     // Update all scripts
     void Update(float dt);
     void FixedUpdate(float fixed_dt);

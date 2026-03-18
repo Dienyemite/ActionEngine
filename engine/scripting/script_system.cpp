@@ -53,7 +53,7 @@ Script* ScriptSystem::AddScript(Entity entity, const std::string& type_name) {
     Script* ptr = script.get();
     
     // Set context and call OnCreate
-    script->SetContext(entity, m_ecs, m_input, m_assets, m_world, m_renderer, m_physics);
+    script->SetContext(entity, m_ecs, m_input, m_assets, m_world, m_renderer, m_physics, this);
     script->OnCreate();
     
     comp->scripts.push_back(std::move(script));

@@ -2,9 +2,13 @@
 #include "animation_clip.h"
 #include "animation_state_machine.h"
 #include "skinned_mesh.h"
+#include "assets/asset_manager.h"
+#include "platform/vulkan/vulkan_context.h"
+#include "gameplay/ecs/ecs.h"
 #include "core/logging.h"
 #include "core/profiler.h"
 #include "core/math/math.h"
+#include <vulkan/vulkan.h>
 #include <cmath>
 
 namespace action {
@@ -92,8 +96,31 @@ void AnimationSystem::Update(float dt) {
         SkinnedMeshData* skinned = m_library->GetSkinnedMesh(player.skeleton_name);
         if (skinned && skinned->is_valid()) {
             CPUSkinMesh(*skinned, player.skinning_matrices, skinned->posed_vertices);
-            // TODO(animation): upload posed_vertices to the GPU vertex buffer
-            // corresponding to this entity's mesh so the renderer draws them.
+
+            // Upload posed vertices to the GPU vertex buffer of this entity's mesh.
+            // The buffer was allocated HOST_VISIBLE so we can map it directly.
+            if (m_assets && m_ecs->HasComponent<RenderComponent>(entity)) {
+                auto* rc = m_ecs->GetComponent<RenderComponent>(entity);
+                MeshData* mesh = m_assets->GetMesh(rc->mesh);
+                if (mesh && mesh->gpu_vertex_buffer && !skinned->posed_vertices.empty()) {
+                    const size_t byte_size = skinned->posed_vertices.size() * sizeof(SkinnedVertex);
+                    // Only upload if the buffer is large enough (should match bind_vertices count)
+                    if (byte_size <= mesh->vertex_data.size()) {
+                        VulkanContext* vkctx = m_assets->GetVulkanContext();
+                        if (vkctx) {
+                            VkDevice device = vkctx->GetDevice();
+                            void* mapped = nullptr;
+                            if (vkMapMemory(device,
+                                    reinterpret_cast<VkDeviceMemory>(mesh->gpu_vertex_memory),
+                                    0, byte_size, 0, &mapped) == VK_SUCCESS) {
+                                memcpy(mapped, skinned->posed_vertices.data(), byte_size);
+                                vkUnmapMemory(device,
+                                    reinterpret_cast<VkDeviceMemory>(mesh->gpu_vertex_memory));
+                            }
+                        }
+                    }
+                }
+            }
         }
     });
 }

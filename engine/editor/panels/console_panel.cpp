@@ -1,6 +1,7 @@
 #include "console_panel.h"
 #include <imgui/imgui.h>
 #include <cstring>
+#include <sstream>
 
 namespace action {
 
@@ -110,9 +111,27 @@ void ConsolePanel::Draw() {
             if (m_command_input[0] != '\0') {
                 // Echo command
                 AddMessage(std::string("> ") + m_command_input, 0);
-                
-                // TODO: Execute command
-                AddMessage("Command execution not implemented", 1);
+
+                // Parse command: split on whitespace
+                std::istringstream iss(m_command_input);
+                std::string cmd;
+                iss >> cmd;
+
+                if (cmd == "clear") {
+                    Clear();
+                } else if (cmd == "help") {
+                    AddMessage("Available commands:", 0);
+                    AddMessage("  clear        - Clear the console", 0);
+                    AddMessage("  help         - Show this help", 0);
+                    AddMessage("  echo <text>  - Echo text back", 0);
+                } else if (cmd == "echo") {
+                    std::string rest;
+                    std::getline(iss, rest);
+                    if (!rest.empty() && rest[0] == ' ') rest.erase(0, 1);
+                    AddMessage(rest, 0);
+                } else {
+                    AddMessage("Unknown command: '" + cmd + "'. Type 'help' for a list.", 1);
+                }
                 
                 m_command_input[0] = '\0';
             }

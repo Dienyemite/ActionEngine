@@ -59,7 +59,8 @@ void AssetManager::Shutdown() {
 
 void AssetManager::Update(size_t upload_budget) {
     PROFILE_SCOPE("AssetManager::Update");
-    
+
+    m_time += 1.0f;  // Monotonic frame counter for LRU timestamps
     m_bytes_uploaded = 0;
     
     // Process load queue
@@ -429,14 +430,191 @@ bool AssetManager::UploadMesh(MeshHandle handle) {
 bool AssetManager::UploadTexture(TextureHandle handle) {
     auto* texture = GetTexture(handle);
     if (!texture) return false;
-    
-    // TODO: Create Vulkan image and upload
-    size_t size = texture->pixel_data.size();
+    if (texture->gpu_image) return true;  // Already uploaded
+    if (!m_vulkan_context) {
+        LOG_ERROR("Cannot upload texture: VulkanContext not set");
+        return false;
+    }
+
+    VkDevice device       = m_vulkan_context->GetDevice();
+    VkPhysicalDevice phys = m_vulkan_context->GetPhysicalDevice();
+    VkQueue  gfx_queue    = m_vulkan_context->GetGraphicsQueue();
+    u32 queue_family      = m_vulkan_context->GetQueueFamilies().graphics.value_or(0);
+
+    VkDeviceSize image_size = static_cast<VkDeviceSize>(texture->pixel_data.size());
+    if (image_size == 0) {
+        LOG_WARN("UploadTexture: texture {} has no pixel data", handle.index);
+        return false;
+    }
+
+    VkFormat vk_format = texture->format ? static_cast<VkFormat>(texture->format) : VK_FORMAT_R8G8B8A8_SRGB;
+
+    // ---- Staging buffer ----
+    VkBuffer staging_buf = VK_NULL_HANDLE;
+    VkDeviceMemory staging_mem = VK_NULL_HANDLE;
+    {
+        VkBufferCreateInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bi.size  = image_size;
+        bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateBuffer(device, &bi, nullptr, &staging_buf) != VK_SUCCESS) {
+            LOG_ERROR("UploadTexture: failed to create staging buffer");
+            return false;
+        }
+        VkMemoryRequirements mr;
+        vkGetBufferMemoryRequirements(device, staging_buf, &mr);
+        VkMemoryAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = mr.size;
+        ai.memoryTypeIndex = m_vulkan_context->FindMemoryType(mr.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (vkAllocateMemory(device, &ai, nullptr, &staging_mem) != VK_SUCCESS) {
+            LOG_ERROR("UploadTexture: failed to allocate staging memory");
+            vkDestroyBuffer(device, staging_buf, nullptr);
+            return false;
+        }
+        vkBindBufferMemory(device, staging_buf, staging_mem, 0);
+        void* mapped;
+        vkMapMemory(device, staging_mem, 0, image_size, 0, &mapped);
+        memcpy(mapped, texture->pixel_data.data(), static_cast<size_t>(image_size));
+        vkUnmapMemory(device, staging_mem);
+    }
+
+    // ---- VkImage ----
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory image_mem = VK_NULL_HANDLE;
+    {
+        VkImageCreateInfo ic{};
+        ic.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ic.imageType   = VK_IMAGE_TYPE_2D;
+        ic.format      = vk_format;
+        ic.extent      = {texture->width, texture->height, 1};
+        ic.mipLevels   = texture->mip_levels > 0 ? texture->mip_levels : 1;
+        ic.arrayLayers = 1;
+        ic.samples     = VK_SAMPLE_COUNT_1_BIT;
+        ic.tiling      = VK_IMAGE_TILING_OPTIMAL;
+        ic.usage       = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        ic.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        ic.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(device, &ic, nullptr, &image) != VK_SUCCESS) {
+            LOG_ERROR("UploadTexture: failed to create VkImage");
+            vkDestroyBuffer(device, staging_buf, nullptr);
+            vkFreeMemory(device, staging_mem, nullptr);
+            return false;
+        }
+        VkMemoryRequirements mr;
+        vkGetImageMemoryRequirements(device, image, &mr);
+        VkMemoryAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = mr.size;
+        ai.memoryTypeIndex = m_vulkan_context->FindMemoryType(mr.memoryTypeBits,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(device, &ai, nullptr, &image_mem) != VK_SUCCESS) {
+            LOG_ERROR("UploadTexture: failed to allocate image memory");
+            vkDestroyImage(device, image, nullptr);
+            vkDestroyBuffer(device, staging_buf, nullptr);
+            vkFreeMemory(device, staging_mem, nullptr);
+            return false;
+        }
+        vkBindImageMemory(device, image, image_mem, 0);
+    }
+
+    // ---- One-shot command buffer ----
+    VkCommandPool tmp_pool = VK_NULL_HANDLE;
+    {
+        VkCommandPoolCreateInfo pi{};
+        pi.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pi.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        pi.queueFamilyIndex = queue_family;
+        vkCreateCommandPool(device, &pi, nullptr, &tmp_pool);
+    }
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    {
+        VkCommandBufferAllocateInfo ca{};
+        ca.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        ca.commandPool = tmp_pool;
+        ca.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ca.commandBufferCount = 1;
+        vkAllocateCommandBuffers(device, &ca, &cmd);
+    }
+    VkCommandBufferBeginInfo bi2{};
+    bi2.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi2.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &bi2);
+
+    // Transition: UNDEFINED → TRANSFER_DST
+    {
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = image;
+        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    }
+
+    // Copy staging buffer to image
+    {
+        VkBufferImageCopy region{};
+        region.bufferOffset = 0;
+        region.bufferRowLength = 0;
+        region.bufferImageHeight = 0;
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageOffset = {0, 0, 0};
+        region.imageExtent = {texture->width, texture->height, 1};
+        vkCmdCopyBufferToImage(cmd, staging_buf, image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    }
+
+    // Transition: TRANSFER_DST → SHADER_READ_ONLY
+    {
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = image;
+        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    }
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+    vkQueueSubmit(gfx_queue, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(gfx_queue);
+
+    vkDestroyCommandPool(device, tmp_pool, nullptr);
+    vkDestroyBuffer(device, staging_buf, nullptr);
+    vkFreeMemory(device, staging_mem, nullptr);
+
+    texture->gpu_image = reinterpret_cast<void*>(image);
+    // Store image memory alongside image — use gpu_image_memory if it exists, else log
+    // (TextureData only has gpu_image; image_mem is leaked here only if not tracked)
+    // To avoid leak, extend TextureData if needed; for now store in a local registry
+    m_texture_image_memories[handle.index] = reinterpret_cast<void*>(image_mem);
+
+    size_t size = static_cast<size_t>(image_size);
     m_bytes_uploaded += size;
     m_texture_pool_used += size;
-    
     m_texture_states[handle.index] = AssetState::Loaded;
-    
+
+    LOG_DEBUG("Uploaded texture {} to GPU: {}x{} ({} bytes)",
+              handle.index, texture->width, texture->height, size);
+
     return true;
 }
 
@@ -508,6 +686,11 @@ void AssetManager::EvictLRU(AssetType type, size_t bytes_needed) {
                 if (tex.gpu_image) {
                     vkDestroyImage(device, reinterpret_cast<VkImage>(tex.gpu_image), nullptr);
                     tex.gpu_image = nullptr;
+                }
+                auto mem_it = m_texture_image_memories.find(idx);
+                if (mem_it != m_texture_image_memories.end() && mem_it->second) {
+                    vkFreeMemory(device, reinterpret_cast<VkDeviceMemory>(mem_it->second), nullptr);
+                    m_texture_image_memories.erase(mem_it);
                 }
             }
             size_t freed = m_textures[idx].pixel_data.size();

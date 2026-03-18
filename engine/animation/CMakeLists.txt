@@ -25,4 +25,6 @@ target_include_directories(EngineAnimation PUBLIC
 target_link_libraries(EngineAnimation PUBLIC
     EngineCore
     EngineGameplay
+    EngineAssets
+    Vulkan::Vulkan
 )

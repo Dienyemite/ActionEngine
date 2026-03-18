@@ -28,6 +28,8 @@
 
 namespace action {
 
+class AssetManager;  // Forward declaration
+
 // -------------------------------------------------------------------------
 // AnimationPlayerComponent — ECS component
 // -------------------------------------------------------------------------
@@ -64,6 +66,10 @@ public:
     explicit AnimationSystem(ECS* ecs, AnimationLibrary* library)
         : m_ecs(ecs), m_library(library) {}
 
+    // Optional: provide an AssetManager so CPU-skinned vertices can be
+    // uploaded to the entity's GPU mesh buffer each frame.
+    void SetAssets(AssetManager* assets) { m_assets = assets; }
+
     // Called each frame by ECS::Update(dt).
     void Update(float dt) override;
 
@@ -83,6 +89,7 @@ private:
 
     ECS*              m_ecs     = nullptr;
     AnimationLibrary* m_library = nullptr;
+    AssetManager*     m_assets  = nullptr;  // Optional; enables GPU vertex upload
 };
 
 } // namespace action

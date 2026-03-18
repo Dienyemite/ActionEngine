@@ -151,6 +151,7 @@ public:
     
     // Set Vulkan context for GPU uploads
     void SetVulkanContext(VulkanContext* context) { m_vulkan_context = context; }
+    VulkanContext* GetVulkanContext() const { return m_vulkan_context; }
     
     // Per-frame update (process load queue, upload to GPU)
     void Update(size_t upload_budget);
@@ -242,6 +243,8 @@ private:
     std::unordered_map<u32, u32>   m_texture_ref_counts;
     std::unordered_map<u32, float> m_texture_last_access;
     float m_time = 0.0f;  // Accumulated frame time for LRU timestamps
+    // Texture VkDeviceMemory backing store (stored as void* for header decoupling)
+    std::unordered_map<u32, void*> m_texture_image_memories;
 
     // Memory tracking
     size_t m_texture_pool_used = 0;

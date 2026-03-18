@@ -29,6 +29,63 @@ void SceneTreePanel::Draw(EditorNode& root, u32& selected_id, std::vector<u32>& 
         m_delete_callback(m_pending_delete_id);
         m_pending_delete_id = 0;
     }
+
+    // Process pending rename: open a popup once per frame
+    if (m_pending_rename_id != 0) {
+        ImGui::OpenPopup("##RenamePopup");
+    }
+    if (ImGui::BeginPopup("##RenamePopup")) {
+        ImGui::Text("Rename node:");
+        if (m_pending_rename_id != 0)
+            ImGui::SetKeyboardFocusHere();
+        if (ImGui::InputText("##rename", m_rename_buf, sizeof(m_rename_buf),
+                             ImGuiInputTextFlags_EnterReturnsTrue)) {
+            EditorNode* target = FindNode(root, m_pending_rename_id);
+            if (target && m_rename_buf[0] != '\0')
+                target->name = m_rename_buf;
+            m_pending_rename_id = 0;
+            ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::Button("Cancel")) {
+            m_pending_rename_id = 0;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // Process pending duplicate
+    if (m_pending_duplicate_id != 0) {
+        EditorNode* parent = FindParent(root, m_pending_duplicate_id);
+        EditorNode* src    = FindNode(root, m_pending_duplicate_id);
+        if (src && parent) {
+            EditorNode copy = DuplicateNode(*src);
+            parent->children.push_back(std::move(copy));
+        }
+        m_pending_duplicate_id = 0;
+    }
+
+    // Process pending reparent (drag-drop)
+    if (m_pending_reparent_src != 0 && m_pending_reparent_dst != 0) {
+        EditorNode* src_node    = FindNode(root, m_pending_reparent_src);
+        EditorNode* old_parent  = FindParent(root, m_pending_reparent_src);
+        EditorNode* new_parent  = FindNode(root, m_pending_reparent_dst);
+        // Guard: don't reparent onto a descendant of src (would create cycle)
+        if (src_node && old_parent && new_parent && src_node != new_parent
+            && FindNode(*src_node, m_pending_reparent_dst) == nullptr) {
+            // Extract from old parent
+            auto& siblings = old_parent->children;
+            auto it = std::find_if(siblings.begin(), siblings.end(),
+                [&](const EditorNode& n){ return n.id == m_pending_reparent_src; });
+            if (it != siblings.end()) {
+                EditorNode moved = std::move(*it);
+                siblings.erase(it);
+                new_parent->children.push_back(std::move(moved));
+                new_parent->expanded = true;
+            }
+        }
+        m_pending_reparent_src = 0;
+        m_pending_reparent_dst = 0;
+    }
 }
 
 void SceneTreePanel::DrawNode(EditorNode& node, u32& selected_id, std::vector<u32>& selected_ids) {
@@ -120,8 +177,10 @@ void SceneTreePanel::DrawNode(EditorNode& node, u32& selected_id, std::vector<u3
     if (ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_NODE")) {
             u32 dropped_id = *(const u32*)payload->Data;
-            // TODO: Implement reparenting
-            (void)dropped_id;
+            if (dropped_id != node.id) {
+                m_pending_reparent_src = dropped_id;
+                m_pending_reparent_dst = node.id;
+            }
         }
         ImGui::EndDragDropTarget();
     }
@@ -139,39 +198,44 @@ void SceneTreePanel::DrawNode(EditorNode& node, u32& selected_id, std::vector<u3
 
 void SceneTreePanel::DrawContextMenu(EditorNode& node) {
     if (ImGui::MenuItem("Add Child Node")) {
-        // TODO: Open add node dialog
+        EditorNode child;
+        child.id   = m_next_id_counter++;
+        child.name = "Node" + std::to_string(child.id);
+        child.type = "Node3D";
+        node.children.push_back(std::move(child));
+        node.expanded = true;
     }
     if (ImGui::MenuItem("Instance Scene")) {
         // TODO: Open scene browser
     }
-    
+
     ImGui::Separator();
-    
+
     if (ImGui::MenuItem("Duplicate", "Ctrl+D")) {
-        // TODO: Duplicate node
+        m_pending_duplicate_id = node.id;
     }
     if (ImGui::MenuItem("Rename", "F2")) {
-        // TODO: Rename node
+        m_pending_rename_id = node.id;
+        snprintf(m_rename_buf, sizeof(m_rename_buf), "%s", node.name.c_str());
     }
     if (ImGui::MenuItem("Delete", "Del")) {
         m_pending_delete_id = node.id;
     }
-    
+
     ImGui::Separator();
-    
-    if (ImGui::MenuItem("Copy", "Ctrl+C")) {}
-    if (ImGui::MenuItem("Cut", "Ctrl+X")) {}
+
+    if (ImGui::MenuItem("Copy",  "Ctrl+C")) {}
+    if (ImGui::MenuItem("Cut",   "Ctrl+X")) {}
     if (ImGui::MenuItem("Paste", "Ctrl+V")) {}
-    
+
     ImGui::Separator();
-    
-    // Quick access to common operations
+
     if (ImGui::BeginMenu("Add")) {
-        if (ImGui::MenuItem("Node3D")) {}
-        if (ImGui::MenuItem("MeshInstance3D")) {}
-        if (ImGui::MenuItem("Camera3D")) {}
+        if (ImGui::MenuItem("Node3D"))           {}
+        if (ImGui::MenuItem("MeshInstance3D"))   {}
+        if (ImGui::MenuItem("Camera3D"))         {}
         if (ImGui::MenuItem("DirectionalLight")) {}
-        if (ImGui::MenuItem("PointLight")) {}
+        if (ImGui::MenuItem("PointLight"))       {}
         ImGui::EndMenu();
     }
 }
@@ -193,6 +257,31 @@ const char* SceneTreePanel::GetNodeIcon(const std::string& type) {
 
 bool SceneTreePanel::IsSelected(u32 node_id, const std::vector<u32>& selected_ids) {
     return std::find(selected_ids.begin(), selected_ids.end(), node_id) != selected_ids.end();
+}
+
+EditorNode* SceneTreePanel::FindNode(EditorNode& root, u32 id) {
+    if (root.id == id) return &root;
+    for (auto& child : root.children) {
+        if (auto* found = FindNode(child, id)) return found;
+    }
+    return nullptr;
+}
+
+EditorNode* SceneTreePanel::FindParent(EditorNode& root, u32 child_id) {
+    for (auto& child : root.children) {
+        if (child.id == child_id) return &root;
+        if (auto* found = FindParent(child, child_id)) return found;
+    }
+    return nullptr;
+}
+
+EditorNode SceneTreePanel::DuplicateNode(const EditorNode& src) {
+    EditorNode copy = src;
+    copy.id   = m_next_id_counter++;
+    copy.name = src.name + "_copy";
+    for (auto& child : copy.children)
+        child = DuplicateNode(child);
+    return copy;
 }
 
 } // namespace action
