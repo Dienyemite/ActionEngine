@@ -31,6 +31,10 @@ add_library(EngineEditor STATIC
     panels/asset_inspector_panel.h
     panels/asset_browser_panel.cpp
     panels/asset_browser_panel.h
+    panels/history_panel.cpp
+    panels/history_panel.h
+    panels/groups_panel.cpp
+    panels/groups_panel.h
 )
 
 target_include_directories(EngineEditor PUBLIC

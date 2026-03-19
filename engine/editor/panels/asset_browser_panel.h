@@ -8,48 +8,70 @@
 namespace action {
 
 /*
- * AssetBrowserPanel — file-system browser for the assets/ directory.
+ * AssetBrowserPanel — Godot-style FileSystem dock.
  *
- * Scans assets/meshes, assets/models, and assets/ root for supported mesh
- * formats (.glb, .gltf, .fbx, .obj, .dae, .blend, .3ds, .stl, .ply).
+ * Shows all project files in a tree view with icons. Left pane is a
+ * directory tree; right pane lists files in the current directory.
+ * Double-clicking a mesh places it in the scene.
  *
- * Double-clicking a file fires m_place_cb with the relative asset path, which
- * the Editor handles by calling LoadMeshSync + AddNode.
+ * The window name is "FileSystem" so it docks into the layout slot.
  */
 class AssetBrowserPanel {
 public:
     AssetBrowserPanel() = default;
     ~AssetBrowserPanel() = default;
 
-    // Set root directory to scan (default: "assets").
     void SetRootDirectory(const std::string& dir);
 
-    // Callback fired when the user wants to place an asset in the scene.
     using PlaceCallback = std::function<void(const std::string& path)>;
     void SetPlaceCallback(PlaceCallback cb) { m_place_cb = cb; }
 
-    // Rescan the directory tree (called automatically on first Draw).
     void Refresh();
-
-    // Draw the panel.
     void Draw();
 
     bool visible = true;
 
 private:
-    struct AssetEntry {
-        std::string display_name;   // Filename without extension
-        std::string path;           // Relative path to pass to LoadMeshSync
-        std::string extension;      // Lower-case extension (.glb, .obj, …)
+    struct FileEntry {
+        std::string name;
+        std::string full_path;   // OS path
+        std::string rel_path;    // Relative from root
+        std::string extension;   // lowercase, e.g. ".glb"
+        bool is_dir = false;
     };
 
-    bool IsSupportedMesh(const std::string& ext) const;
+    struct DirNode {
+        std::string name;
+        std::string full_path;
+        std::vector<DirNode> subdirs;
+        std::vector<FileEntry> files;
+    };
 
-    std::string           m_root_dir  = "assets";
-    std::vector<AssetEntry> m_assets;
-    char                  m_filter[128] = {};
-    bool                  m_needs_refresh = true;
-    PlaceCallback         m_place_cb;
+    // Recursive tree builder
+    void BuildTree(DirNode& node, const std::string& dir_path, const std::string& rel_base);
+
+    // Draw the directory tree pane
+    void DrawDirTree(const DirNode& node);
+
+    // Draw the file list for the current directory
+    void DrawFileList();
+
+    const char* GetFileIcon(const std::string& ext) const;
+    bool IsMeshFile(const std::string& ext) const;
+
+    DirNode m_root_node;
+    std::string m_root_dir = "assets";
+    std::string m_current_dir_path;     // Currently browsed directory (full path)
+    std::vector<FileEntry>* m_current_files = nullptr;  // Pointer into tree
+
+    // For the flat "current dir" display
+    std::vector<FileEntry> m_current_dir_files;
+
+    char m_filter[128] = {};
+    bool m_needs_refresh = true;
+
+    PlaceCallback m_place_cb;
+    std::string m_selected_path;
 };
 
 } // namespace action

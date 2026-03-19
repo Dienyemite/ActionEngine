@@ -46,8 +46,10 @@ public:
     
 private:
     void DrawNodeHeader(EditorNode& node);
+    void DrawNodeInfo(EditorNode& node);
     void DrawTransform(EditorNode& node);
     void DrawNodeProperties(EditorNode& node);
+    bool SectionVisible(const char* section_name) const;
     
     // Property helpers
     bool DrawVec3(const char* label, vec3& value, float reset_value = 0.0f);
@@ -76,6 +78,9 @@ private:
     bool                 m_show_create_script_dialog = false;
     char                 m_new_script_name[64]       = {};
     CreateScriptCallback m_create_script_cb;
+
+    // Search filter
+    char m_search_buf[128] = {};
 };
 
 } // namespace action

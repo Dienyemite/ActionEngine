@@ -11,12 +11,15 @@
 #include "panels/gizmo_panel.h"
 #include "panels/asset_inspector_panel.h"
 #include "panels/asset_browser_panel.h"
+#include "panels/history_panel.h"
+#include "panels/groups_panel.h"
 #include "commands/command.h"
 #include "prefabs/prefab.h"
 #include "assets/asset_hot_reloader.h"
 #include "shader_graph/shader_graph_editor.h"
 #include "project/project.h"
 #include "project/scene_serializer.h"
+#include <imgui/imgui.h>
 #include <memory>
 #include <functional>
 
@@ -42,6 +45,20 @@ struct EditorConfig {
     bool dark_theme = true;
 };
 
+// Gizmo transform mode (matches Godot's toolbar buttons)
+enum class TransformMode {
+    Select  = 0,
+    Move    = 1,
+    Rotate  = 2,
+    Scale   = 3,
+};
+
+// Gizmo coordinate space
+enum class TransformSpace {
+    World = 0,
+    Local = 1,
+};
+
 // Editor node linked to actual ECS entity
 struct EditorNode {
     u32 id = 0;
@@ -64,6 +81,37 @@ struct EditorNode {
     
     // Mesh handle for mesh nodes
     MeshHandle mesh{0};
+
+    // ---- Light properties ----
+    vec3  light_color{1.0f, 0.95f, 0.9f};
+    float light_intensity = 1.0f;
+    float light_range = 10.0f;
+    float light_inner_angle = 30.0f;
+    float light_outer_angle = 45.0f;
+    bool  light_cast_shadows = true;
+
+    // ---- Camera properties ----
+    float cam_fov = 75.0f;
+    float cam_near = 0.1f;
+    float cam_far = 2000.0f;
+    int   cam_projection = 0;  // 0=Perspective, 1=Orthographic
+
+    // ---- Physics body properties ----
+    float phys_mass = 1.0f;
+    float phys_friction = 0.5f;
+    float phys_bounce = 0.0f;
+    bool  phys_lock_rotation = false;
+
+    // ---- Particle properties ----
+    int   particles_amount = 100;
+    float particles_lifetime = 1.0f;
+    float particles_speed_scale = 1.0f;
+
+    // ---- Audio properties ----
+    float audio_volume_db = 0.0f;
+    float audio_pitch = 1.0f;
+    bool  audio_autoplay = false;
+    bool  audio_loop = false;
 };
 
 class Editor {
@@ -171,6 +219,7 @@ public:
     
 private:
     void SetupDockspace();
+    void BuildDefaultLayout(ImGuiID dockspace_id);   // First-run Godot layout
     void SetupStyle();
     void DrawMenuBar();
     void DrawToolbar();
@@ -211,6 +260,8 @@ private:
     std::unique_ptr<ShaderGraphEditor> m_shader_graph_editor;
     std::unique_ptr<AssetInspectorPanel> m_asset_inspector_panel;
     std::unique_ptr<AssetBrowserPanel>   m_asset_browser_panel;
+    std::unique_ptr<HistoryPanel>        m_history_panel;
+    std::unique_ptr<GroupsPanel>         m_groups_panel;
     
     // Prefab system
     PrefabManager m_prefab_manager;
@@ -220,6 +271,7 @@ private:
     
     // State
     bool m_play_mode = false;
+    bool m_paused = false;
     bool m_show_demo_window = false;
     bool m_show_add_node_popup = false;
     bool m_show_save_prefab_popup = false;
@@ -227,6 +279,15 @@ private:
     bool m_show_unsaved_changes_popup = false;
     bool m_show_project_settings = false;
     bool m_show_export_dialog = false;
+    bool m_layout_initialized = false;  // True once Godot default layout has been built
+
+    // Transform toolbar
+    TransformMode  m_transform_mode  = TransformMode::Move;
+    TransformSpace m_transform_space = TransformSpace::World;
+    bool           m_snap_enabled = false;
+    float          m_snap_translate = 0.25f;
+    float          m_snap_rotate    = 15.0f;
+    float          m_snap_scale     = 0.25f;
     char m_prefab_name_buffer[128] = "";
     char m_new_project_name[128] = "MyProject";
     char m_new_project_path[512] = "";

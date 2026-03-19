@@ -8,6 +8,7 @@
 #include "world/world_manager.h"
 #include "commands/editor_commands.h"
 #include <imgui/imgui.h>
+#include <imgui/imgui_internal.h>   // DockBuilder API
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -64,6 +65,14 @@ bool Editor::Initialize(Renderer& renderer, Platform& platform, ECS& ecs,
         AddMeshFromFile(path);
     });
     m_asset_browser_panel->visible = true;  // Open by default
+
+    // History panel (undo/redo viewer)
+    m_history_panel = std::make_unique<HistoryPanel>();
+    m_history_panel->visible = false;
+
+    // Groups panel
+    m_groups_panel = std::make_unique<GroupsPanel>();
+    m_groups_panel->visible = false;
     
     // Set up Inspector delete callback
     m_inspector_panel->SetDeleteCallback([this](u32 node_id) {
@@ -148,6 +157,8 @@ void Editor::Shutdown() {
     m_gizmo_panel.reset();
     m_shader_graph_editor.reset();
     m_asset_inspector_panel.reset();
+    m_history_panel.reset();
+    m_groups_panel.reset();
     
     if (m_imgui_renderer) {
         m_imgui_renderer->Shutdown();
@@ -243,8 +254,12 @@ void Editor::Update(float dt) {
     
     m_console_panel->Draw();
     
-    // Draw asset browser
+    // Draw asset browser / filesystem dock
     m_asset_browser_panel->Draw();
+
+    // Draw history and groups panels
+    m_history_panel->Draw(m_command_history);
+    m_groups_panel->Draw(m_scene_root, m_selected_node_id);
     
     // Draw gizmos for selected object (if any and not in play mode)
     if (selected && selected->entity != INVALID_ENTITY && !m_play_mode && m_viewport_panel->show_gizmos) {
@@ -354,7 +369,65 @@ void Editor::SetupDockspace() {
     ImGuiID dockspace_id = ImGui::GetID("ActionEngineDockSpace");
     ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
     
+    // Build the default Godot-like layout on first run
+    if (!m_layout_initialized) {
+        m_layout_initialized = true;
+        BuildDefaultLayout(dockspace_id);
+    }
+    
     ImGui::End();
+}
+
+void Editor::BuildDefaultLayout(ImGuiID dockspace_id) {
+    // Godot 4 default layout:
+    //
+    //  ┌─────────────────────────────────────────────────────────┐
+    //  │  Menu bar  +  Toolbar (fixed, not docked)               │
+    //  ├──────────────┬──────────────────────────────┬───────────┤
+    //  │  Scene       │                              │ Inspector │
+    //  │  (left dock) │   3D Viewport (center)       │ (right)   │
+    //  │              │                              │           │
+    //  ├──────────────┤                              │           │
+    //  │  FileSystem  ├──────────────────────────────┤           │
+    //  │  (bot-left)  │  Output/Console (bottom)     │           │
+    //  └──────────────┴──────────────────────────────┴───────────┘
+
+    ImGui::DockBuilderRemoveNode(dockspace_id);
+    ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(dockspace_id, ImGui::GetMainViewport()->WorkSize);
+
+    ImGuiID dock_main      = dockspace_id;
+    ImGuiID dock_right     = 0;
+    ImGuiID dock_left      = 0;
+    ImGuiID dock_bottom    = 0;
+    ImGuiID dock_center    = 0;
+    ImGuiID dock_left_top  = 0;
+    ImGuiID dock_left_bot  = 0;
+
+    // 1. Split off right panel (Inspector) – 22% of total width
+    dock_main = ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Right, 0.22f, &dock_right, &dock_center);
+
+    // 2. Split off left panel (Scene + FileSystem) – 20% of remaining
+    dock_center = ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Left, 0.20f, &dock_left, &dock_center);
+
+    // 3. Split off bottom panel (Console/Output) – 22% of remaining center height
+    ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Down, 0.22f, &dock_bottom, &dock_center);
+
+    // 4. Split the left panel: top = Scene tree, bottom = FileSystem
+    ImGui::DockBuilderSplitNode(dock_left, ImGuiDir_Down, 0.35f, &dock_left_bot, &dock_left_top);
+
+    // Dock windows into the layout nodes
+    ImGui::DockBuilderDockWindow("Scene",       dock_left_top);
+    ImGui::DockBuilderDockWindow("FileSystem",  dock_left_bot);
+    ImGui::DockBuilderDockWindow("Inspector",   dock_right);
+    ImGui::DockBuilderDockWindow("3D Viewport", dock_center);
+    ImGui::DockBuilderDockWindow("Console",     dock_bottom);
+    // Secondary panels share docks by being tabbed
+    ImGui::DockBuilderDockWindow("Groups",      dock_left_bot);
+    ImGui::DockBuilderDockWindow("History",     dock_right);
+    ImGui::DockBuilderDockWindow("Shader Graph", dock_center);
+
+    ImGui::DockBuilderFinish(dockspace_id);
 }
 
 void Editor::SetupStyle() {
@@ -583,10 +656,17 @@ void Editor::DrawMenuBar() {
             ImGui::MenuItem("Scene Tree", nullptr, &m_scene_tree_panel->visible);
             ImGui::MenuItem("Inspector", nullptr, &m_inspector_panel->visible);
             ImGui::MenuItem("Console", nullptr, &m_console_panel->visible);
-            ImGui::MenuItem("Asset Browser", nullptr, &m_asset_browser_panel->visible);
+            ImGui::MenuItem("FileSystem", nullptr, &m_asset_browser_panel->visible);
+            ImGui::Separator();
+            ImGui::MenuItem("Groups", nullptr, &m_groups_panel->visible);
+            ImGui::MenuItem("History", nullptr, &m_history_panel->visible);
             ImGui::Separator();
             ImGui::MenuItem("Shader Graph", nullptr, &m_shader_graph_editor->visible);
             ImGui::MenuItem("Asset Inspector", nullptr, &m_asset_inspector_panel->visible);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Reset Layout")) {
+                m_layout_initialized = false;  // Will rebuild on next frame
+            }
             ImGui::Separator();
             ImGui::MenuItem("ImGui Demo", nullptr, &m_show_demo_window);
             ImGui::EndMenu();
@@ -756,61 +836,163 @@ void Editor::DrawMenuBar() {
 void Editor::DrawToolbar() {
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetMainViewport()->WorkPos.x, 
                                     ImGui::GetMainViewport()->WorkPos.y + 19));
-    ImGui::SetNextWindowSize(ImVec2(ImGui::GetMainViewport()->WorkSize.x, 40));
+    ImGui::SetNextWindowSize(ImVec2(ImGui::GetMainViewport()->WorkSize.x, 42));
     
     ImGuiWindowFlags toolbar_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize;
     toolbar_flags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar;
     toolbar_flags |= ImGuiWindowFlags_NoSavedSettings;
     
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.12f, 0.12f, 0.12f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 5));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.13f, 0.13f, 0.13f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
     
     if (ImGui::Begin("##Toolbar", nullptr, toolbar_flags)) {
-        // Transform mode buttons
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
-        
-        // Toggle gizmo visibility
-        bool gizmo_active = m_gizmo_panel->enabled;
-        if (gizmo_active) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.5f, 0.7f, 1.0f));
-        }
-        if (ImGui::Button("Gizmo (G)")) {
-            m_gizmo_panel->enabled = !m_gizmo_panel->enabled;
-        }
-        if (gizmo_active) {
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 5));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 0));
+
+        // --- Transform mode buttons (left side, like Godot) ---
+        // Select
+        {
+            bool active = (m_transform_mode == TransformMode::Select);
+            if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.28f, 0.45f, 0.68f, 1.0f));
+            else        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.22f, 0.22f, 1.0f));
+            if (ImGui::Button("Q Select")) m_transform_mode = TransformMode::Select;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Select Mode (Q)");
             ImGui::PopStyleColor();
         }
-        
         ImGui::SameLine();
-        ImGui::Text("|");
+        // Move
+        {
+            bool active = (m_transform_mode == TransformMode::Move);
+            if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.28f, 0.45f, 0.68f, 1.0f));
+            else        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.22f, 0.22f, 1.0f));
+            if (ImGui::Button("W Move")) m_transform_mode = TransformMode::Move;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move Mode (W)");
+            ImGui::PopStyleColor();
+        }
         ImGui::SameLine();
-        
-        // Play/Stop buttons - center them
+        // Rotate
+        {
+            bool active = (m_transform_mode == TransformMode::Rotate);
+            if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.28f, 0.45f, 0.68f, 1.0f));
+            else        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.22f, 0.22f, 1.0f));
+            if (ImGui::Button("E Rotate")) m_transform_mode = TransformMode::Rotate;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rotate Mode (E)");
+            ImGui::PopStyleColor();
+        }
+        ImGui::SameLine();
+        // Scale
+        {
+            bool active = (m_transform_mode == TransformMode::Scale);
+            if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.28f, 0.45f, 0.68f, 1.0f));
+            else        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.22f, 0.22f, 1.0f));
+            if (ImGui::Button("R Scale")) m_transform_mode = TransformMode::Scale;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scale Mode (R)");
+            ImGui::PopStyleColor();
+        }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+
+        // --- World / Local space toggle ---
+        {
+            bool world = (m_transform_space == TransformSpace::World);
+            if (world) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.28f, 0.45f, 0.68f, 1.0f));
+            else       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.22f, 0.22f, 1.0f));
+            if (ImGui::Button("World")) m_transform_space = TransformSpace::World;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("World Space");
+            ImGui::PopStyleColor();
+        }
+        ImGui::SameLine();
+        {
+            bool local = (m_transform_space == TransformSpace::Local);
+            if (local) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.28f, 0.45f, 0.68f, 1.0f));
+            else       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.22f, 0.22f, 1.0f));
+            if (ImGui::Button("Local")) m_transform_space = TransformSpace::Local;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Local Space");
+            ImGui::PopStyleColor();
+        }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+
+        // --- Snap toggle ---
+        {
+            if (m_snap_enabled) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.5f, 0.1f, 1.0f));
+            else                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.22f, 0.22f, 1.0f));
+            if (ImGui::Button("Snap")) m_snap_enabled = !m_snap_enabled;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle snapping");
+            ImGui::PopStyleColor();
+        }
+        if (m_snap_enabled) {
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.20f, 0.20f, 0.20f, 1.0f));
+            ImGui::SetNextItemWidth(55);
+            ImGui::DragFloat("T##snap_t", &m_snap_translate, 0.01f, 0.001f, 100.0f, "%.2f");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Translate snap");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(50);
+            ImGui::DragFloat("R##snap_r", &m_snap_rotate, 0.5f, 0.5f, 180.0f, "%.1f");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rotate snap (deg)");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(50);
+            ImGui::DragFloat("S##snap_s", &m_snap_scale, 0.01f, 0.001f, 10.0f, "%.2f");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scale snap");
+            ImGui::PopStyleColor();
+        }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+
+        // --- Gizmo toggle ---
+        {
+            bool gizmo_on = m_gizmo_panel->enabled;
+            if (gizmo_on) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.28f, 0.45f, 0.68f, 1.0f));
+            else          ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.22f, 0.22f, 1.0f));
+            if (ImGui::Button("Gizmo (G)")) m_gizmo_panel->enabled = !m_gizmo_panel->enabled;
+            ImGui::PopStyleColor();
+        }
+
+        // --- Play / Stop / Pause  (centred) ---
         float center_x = ImGui::GetMainViewport()->WorkSize.x / 2.0f;
-        ImGui::SetCursorPosX(center_x - 60);
-        
-        if (m_play_mode) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.2f, 0.2f, 1.0f));
-            if (ImGui::Button("Stop")) {
-                m_play_mode = false;
-            }
-            ImGui::PopStyleColor();
+        ImGui::SetCursorPosX(center_x - 72.0f);
+
+        // Play
+        if (!m_play_mode) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.55f, 0.18f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.70f, 0.25f, 1.0f));
+            if (ImGui::Button("  Play  ")) m_play_mode = true;
+            ImGui::PopStyleColor(2);
         } else {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.0f));
-            if (ImGui::Button("Play")) {
-                m_play_mode = true;
-            }
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.18f, 0.18f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.80f, 0.25f, 0.25f, 1.0f));
+            if (ImGui::Button("  Stop  ")) { m_play_mode = false; m_paused = false; }
+            ImGui::PopStyleColor(2);
+        }
+        ImGui::SameLine();
+        {
+            bool paused = m_paused && m_play_mode;
+            if (paused) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.5f, 0.1f, 1.0f));
+            else        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.22f, 0.22f, 1.0f));
+            if (ImGui::Button("Pause") && m_play_mode) m_paused = !m_paused;
             ImGui::PopStyleColor();
         }
-        
-        ImGui::SameLine();
-        if (ImGui::Button("Pause")) {}
-        
-        ImGui::PopStyleVar();
+
+        // --- FPS display (right side) ---
+        float fps_x = ImGui::GetMainViewport()->WorkSize.x - 110.0f;
+        ImGui::SetCursorPosX(fps_x);
+        static float displayed_dt = 0.016f;
+        // Use a simple EMA to smooth the display
+        ImGui::TextDisabled("%.1f FPS", 1.0f / displayed_dt);
+
+        ImGui::PopStyleVar(2);  // FramePadding, ItemSpacing
     }
     ImGui::End();
     
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(2);
     ImGui::PopStyleVar();
 }
 
@@ -820,40 +1002,92 @@ void Editor::DrawAddNodePopup() {
         m_show_add_node_popup = false;
     }
     
-    if (ImGui::BeginPopupModal("Add Node", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Select a node type to add:");
+    ImGui::SetNextWindowSize(ImVec2(360, 480), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Add Node", nullptr, ImGuiWindowFlags_NoResize)) {
+        static char search_buf[128] = {};
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputTextWithHint("##nodeSearch", "Search node type...", search_buf, sizeof(search_buf));
         ImGui::Separator();
-        
-        if (ImGui::BeginChild("NodeTypes", ImVec2(300, 200))) {
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "3D Nodes");
-            if (ImGui::Selectable("  Cube")) {
-                AddNode("Cube");
-                ImGui::CloseCurrentPopup();
+
+        struct NodeEntry { const char* category; const char* type; const char* icon; };
+        static const NodeEntry k_nodes[] = {
+            // 3D Nodes
+            {"3D", "Node3D",         "O"},
+            {"3D", "Cube",           "[C]"},
+            {"3D", "Sphere",         "(S)"},
+            {"3D", "Plane",          "_P_"},
+            {"3D", "Cylinder",       "|Y|"},
+            {"3D", "Capsule",        "(A)"},
+            {"3D", "MeshInstance3D", "[M]"},
+            // Lights
+            {"Lights", "DirectionalLight", "=>"},
+            {"Lights", "PointLight",       "(.)" },
+            {"Lights", "SpotLight",        "V"  },
+            {"Lights", "OmniLight3D",      "*"  },
+            // Camera
+            {"Camera", "Camera3D", "[CAM]"},
+            // Physics
+            {"Physics", "RigidBody3D",    "[RB]"},
+            {"Physics", "StaticBody3D",   "[SB]"},
+            {"Physics", "CharacterBody3D","[CB]"},
+            {"Physics", "CollisionShape3D","[CS]"},
+            // Environment
+            {"Environment", "WorldEnvironment",  "[WE]"},
+            {"Environment", "FogVolume",         "[FG]"},
+            // Audio
+            {"Audio", "AudioStreamPlayer3D", "[AU]"},
+            // Navigation
+            {"Navigation", "NavigationRegion3D", "[NR]"},
+            // Visual effects
+            {"VFX", "GPUParticles3D", "[VFX]"},
+            // Animation
+            {"Anim", "AnimationPlayer", "[AP]"},
+            {"Anim", "AnimationTree",   "[AT]"},
+            // Skeletons
+            {"Skeleton", "Skeleton3D", "[SK]"},
+        };
+
+        const char* current_cat = nullptr;
+        bool any_shown = false;
+
+        if (ImGui::BeginChild("##NodeTypeList", ImVec2(0, -40))) {
+            for (const auto& n : k_nodes) {
+                // Filter by search
+                if (search_buf[0] != '\0') {
+                    // Case-insensitive substring match
+                    std::string type_lower = n.type;
+                    std::string search_lower = search_buf;
+                    auto to_lower = [](std::string& s){ for (char& c : s) c = (char)tolower(c); };
+                    to_lower(type_lower);
+                    to_lower(search_lower);
+                    if (type_lower.find(search_lower) == std::string::npos) continue;
+                }
+
+                // Category header
+                if (!current_cat || std::string(current_cat) != std::string(n.category)) {
+                    if (current_cat) ImGui::Separator();
+                    current_cat = n.category;
+                    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "%s", current_cat);
+                }
+
+                char label[128];
+                snprintf(label, sizeof(label), "  %s  %s", n.icon, n.type);
+                if (ImGui::Selectable(label)) {
+                    AddNode(n.type);
+                    search_buf[0] = '\0';
+                    ImGui::CloseCurrentPopup();
+                }
+                any_shown = true;
             }
-            if (ImGui::Selectable("  Sphere")) {
-                AddNode("Sphere");
-                ImGui::CloseCurrentPopup();
-            }
-            if (ImGui::Selectable("  Plane")) {
-                AddNode("Plane");
-                ImGui::CloseCurrentPopup();
-            }
-            if (ImGui::Selectable("  Node3D (Empty)")) {
-                AddNode("Node3D");
-                ImGui::CloseCurrentPopup();
-            }
-            
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Lights");
-            if (ImGui::Selectable("  PointLight")) {
-                AddNode("PointLight");
-                ImGui::CloseCurrentPopup();
+            if (!any_shown) {
+                ImGui::TextDisabled("No nodes match \"%s\"", search_buf);
             }
         }
         ImGui::EndChild();
-        
+
         ImGui::Separator();
         if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            search_buf[0] = '\0';
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();

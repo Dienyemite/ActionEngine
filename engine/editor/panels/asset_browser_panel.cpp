@@ -6,16 +6,40 @@
 #include <cctype>
 
 namespace action {
+namespace fs = std::filesystem;
 
-static const char* k_supported_exts[] = {
-    ".glb", ".gltf", ".fbx", ".obj", ".dae", ".blend", ".3ds", ".stl", ".ply"
-};
+static std::string ToLower(std::string s) {
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
 
-bool AssetBrowserPanel::IsSupportedMesh(const std::string& ext) const {
-    for (const char* e : k_supported_exts) {
+static std::string NormalizePath(std::string p) {
+    for (char& c : p) if (c == '\\') c = '/';
+    return p;
+}
+
+bool AssetBrowserPanel::IsMeshFile(const std::string& ext) const {
+    static const char* k_mesh_exts[] = {
+        ".glb", ".gltf", ".fbx", ".obj", ".dae", ".blend", ".3ds", ".stl", ".ply"
+    };
+    for (const char* e : k_mesh_exts)
         if (ext == e) return true;
-    }
     return false;
+}
+
+const char* AssetBrowserPanel::GetFileIcon(const std::string& ext) const {
+    if (ext == ".glb" || ext == ".gltf") return "[glTF]";
+    if (ext == ".fbx")                   return "[FBX] ";
+    if (ext == ".obj")                   return "[OBJ] ";
+    if (ext == ".dae")                   return "[DAE] ";
+    if (ext == ".png" || ext == ".jpg" || ext == ".tga" || ext == ".bmp" || ext == ".hdr")
+                                         return "[IMG] ";
+    if (ext == ".wav" || ext == ".ogg" || ext == ".mp3") return "[SND] ";
+    if (ext == ".aescene")               return "[SCN] ";
+    if (ext == ".h"  || ext == ".cpp")   return "[SRC] ";
+    if (ext == ".glsl" || ext == ".vert" || ext == ".frag") return "[SHD] ";
+    if (ext == ".json" || ext == ".ini" || ext == ".toml")  return "[CFG] ";
+    return "[FILE]";
 }
 
 void AssetBrowserPanel::SetRootDirectory(const std::string& dir) {
@@ -23,131 +47,175 @@ void AssetBrowserPanel::SetRootDirectory(const std::string& dir) {
     m_needs_refresh = true;
 }
 
-void AssetBrowserPanel::Refresh() {
-    m_assets.clear();
-
-    namespace fs = std::filesystem;
-
-    if (!fs::exists(m_root_dir)) {
-        LOG_WARN("[AssetBrowser] Directory not found: {}", m_root_dir);
-        return;
-    }
-
+void AssetBrowserPanel::BuildTree(DirNode& node, const std::string& dir_path, const std::string& rel_base) {
     std::error_code ec;
-    for (auto& entry : fs::recursive_directory_iterator(m_root_dir, ec)) {
-        if (!entry.is_regular_file()) continue;
+    if (!fs::exists(dir_path, ec)) return;
 
-        std::string ext = entry.path().extension().string();
-        // Convert to lower-case
-        for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    std::vector<fs::directory_entry> entries;
+    for (auto& e : fs::directory_iterator(dir_path, ec))
+        entries.push_back(e);
 
-        if (!IsSupportedMesh(ext)) continue;
+    std::sort(entries.begin(), entries.end(),
+        [](const fs::directory_entry& a, const fs::directory_entry& b) {
+            bool a_dir = a.is_directory();
+            bool b_dir = b.is_directory();
+            if (a_dir != b_dir) return a_dir > b_dir;  // Dirs first
+            return a.path().filename().string() < b.path().filename().string();
+        });
 
-        AssetEntry ae;
-        ae.display_name = entry.path().stem().string();
-        ae.extension    = ext;
+    for (const auto& e : entries) {
+        std::string name = e.path().filename().string();
+        std::string full = NormalizePath(e.path().string());
+        std::string rel  = rel_base.empty() ? name : (rel_base + "/" + name);
 
-        // Store as a forward-slash relative path from cwd
-        std::string full = entry.path().string();
-        // Replace backslashes
-        for (char& c : full) if (c == '\\') c = '/';
-        ae.path = full;
-
-        m_assets.push_back(std::move(ae));
+        if (e.is_directory(ec)) {
+            DirNode child;
+            child.name      = name;
+            child.full_path = full;
+            BuildTree(child, full, rel);
+            node.subdirs.push_back(std::move(child));
+        } else if (e.is_regular_file(ec)) {
+            FileEntry fe;
+            fe.name      = name;
+            fe.full_path = full;
+            fe.rel_path  = rel;
+            fe.extension = ToLower(e.path().extension().string());
+            fe.is_dir    = false;
+            node.files.push_back(std::move(fe));
+        }
     }
+}
 
-    // Sort by display name
-    std::sort(m_assets.begin(), m_assets.end(),
-              [](const AssetEntry& a, const AssetEntry& b) {
-                  return a.display_name < b.display_name;
-              });
+void AssetBrowserPanel::Refresh() {
+    m_root_node = DirNode{};
+    m_root_node.name      = m_root_dir;
+    m_root_node.full_path = NormalizePath(fs::absolute(m_root_dir).string());
 
-    LOG_INFO("[AssetBrowser] Found {} mesh assets", m_assets.size());
+    BuildTree(m_root_node, m_root_node.full_path, "");
+
+    // Default to showing the root directory
+    m_current_dir_files = m_root_node.files;
+    m_current_dir_path  = m_root_node.full_path;
+
     m_needs_refresh = false;
+}
+
+void AssetBrowserPanel::DrawDirTree(const DirNode& node) {
+    bool is_current = (node.full_path == m_current_dir_path);
+
+    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
+    if (node.subdirs.empty()) flags |= ImGuiTreeNodeFlags_Leaf;
+    if (is_current)           flags |= ImGuiTreeNodeFlags_Selected;
+
+    bool open = ImGui::TreeNodeEx(node.name.c_str(), flags);
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+        m_current_dir_path  = node.full_path;
+        m_current_dir_files = node.files;
+    }
+    if (open) {
+        for (const auto& sub : node.subdirs) {
+            DrawDirTree(sub);
+        }
+        ImGui::TreePop();
+    }
+}
+
+void AssetBrowserPanel::DrawFileList() {
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##fs_filter", "Filter...", m_filter, sizeof(m_filter));
+    ImGui::Separator();
+
+    if (ImGui::BeginChild("##fsfiles", ImVec2(0, 0))) {
+        if (m_current_dir_files.empty()) {
+            ImGui::TextDisabled("(empty directory)");
+        }
+        for (const auto& fe : m_current_dir_files) {
+            // Filter
+            if (m_filter[0] != '\0') {
+                std::string n_low = ToLower(fe.name);
+                std::string f_low = ToLower(m_filter);
+                if (n_low.find(f_low) == std::string::npos) continue;
+            }
+
+            bool selected = (m_selected_path == fe.full_path);
+
+            // Icon
+            const char* icon = GetFileIcon(fe.extension);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.7f, 0.9f, 1.0f));
+            ImGui::TextUnformatted(icon);
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+
+            ImGui::PushID(fe.full_path.c_str());
+            if (ImGui::Selectable(fe.name.c_str(), selected,
+                                  ImGuiSelectableFlags_AllowDoubleClick)) {
+                m_selected_path = fe.full_path;
+                if (ImGui::IsMouseDoubleClicked(0) && m_place_cb && IsMeshFile(fe.extension)) {
+                    m_place_cb(fe.full_path);
+                }
+            }
+
+            // Tooltip
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s\n%s%s", fe.rel_path.c_str(),
+                    IsMeshFile(fe.extension) ? "Double-click to place in scene\n" : "",
+                    fe.extension.c_str());
+            }
+
+            // Context menu
+            if (ImGui::BeginPopupContextItem("##fscm")) {
+                if (IsMeshFile(fe.extension)) {
+                    if (ImGui::MenuItem("Place in Scene")) {
+                        if (m_place_cb) m_place_cb(fe.full_path);
+                    }
+                    ImGui::Separator();
+                }
+                ImGui::TextDisabled("%s", fe.rel_path.c_str());
+                ImGui::EndPopup();
+            }
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
 }
 
 void AssetBrowserPanel::Draw() {
     if (!visible) return;
+    if (m_needs_refresh) Refresh();
 
-    if (m_needs_refresh) {
-        Refresh();
-    }
-
-    if (!ImGui::Begin("Asset Browser", &visible)) {
+    if (!ImGui::Begin("FileSystem", &visible)) {
         ImGui::End();
         return;
     }
 
-    // Toolbar
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 70.0f);
-    ImGui::InputTextWithHint("##filter", "Filter...", m_filter, sizeof(m_filter));
+    // Toolbar row
+    if (ImGui::Button("Refresh")) Refresh();
     ImGui::SameLine();
-    if (ImGui::Button("Refresh")) {
-        Refresh();
+    // Show current relative path
+    std::string display_path = m_current_dir_path;
+    // Strip absolute root prefix for display
+    std::string abs_root = NormalizePath(fs::absolute(m_root_dir).string());
+    if (display_path.rfind(abs_root, 0) == 0) {
+        display_path = "res:/" + display_path.substr(abs_root.size());
     }
+    ImGui::TextDisabled("%s", display_path.c_str());
 
     ImGui::Separator();
 
-    // Asset count
-    ImGui::TextDisabled("%zu asset(s) in '%s'", m_assets.size(), m_root_dir.c_str());
-    ImGui::Spacing();
+    // Split: left = dir tree, right = file list
+    float avail = ImGui::GetContentRegionAvail().x;
+    float left_w  = avail * 0.35f;
+    float right_w = avail - left_w - ImGui::GetStyle().ItemSpacing.x;
 
-    // Asset list
-    if (ImGui::BeginChild("##assetlist", ImVec2(0, 0), false)) {
-        for (const auto& asset : m_assets) {
-            // Filter
-            if (m_filter[0] != '\0') {
-                std::string name_lower = asset.display_name;
-                std::string filter_lower = m_filter;
-                for (char& c : name_lower)   c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                for (char& c : filter_lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                if (name_lower.find(filter_lower) == std::string::npos) continue;
-            }
+    if (ImGui::BeginChild("##FSDirTree", ImVec2(left_w, 0), true)) {
+        DrawDirTree(m_root_node);
+    }
+    ImGui::EndChild();
 
-            // Row
-            ImGui::PushID(asset.path.c_str());
+    ImGui::SameLine();
 
-            // Icon based on extension
-            const char* icon = "[3D]";
-            if (asset.extension == ".glb" || asset.extension == ".gltf") icon = "[glTF]";
-            else if (asset.extension == ".fbx") icon = "[FBX]";
-            else if (asset.extension == ".obj") icon = "[OBJ]";
-
-            ImGui::TextDisabled("%s", icon);
-            ImGui::SameLine();
-
-            // Selectable name — double-click places asset
-            bool selected = false;
-            if (ImGui::Selectable(asset.display_name.c_str(), selected,
-                                  ImGuiSelectableFlags_AllowDoubleClick)) {
-                if (ImGui::IsMouseDoubleClicked(0) && m_place_cb) {
-                    m_place_cb(asset.path);
-                }
-            }
-
-            // Tooltip shows full path
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Path: %s\nDouble-click to place in scene", asset.path.c_str());
-            }
-
-            // Right-click context menu
-            if (ImGui::BeginPopupContextItem("##ctx")) {
-                if (ImGui::MenuItem("Place in Scene")) {
-                    if (m_place_cb) m_place_cb(asset.path);
-                }
-                ImGui::TextDisabled("%s", asset.path.c_str());
-                ImGui::EndPopup();
-            }
-
-            ImGui::PopID();
-        }
-
-        if (m_assets.empty()) {
-            ImGui::TextDisabled("No mesh files found.");
-            ImGui::TextDisabled("Put .glb / .fbx / .obj files in:");
-            ImGui::TextDisabled("  assets/meshes/");
-            ImGui::TextDisabled("  assets/models/");
-        }
+    if (ImGui::BeginChild("##FSFileList", ImVec2(right_w, 0), false)) {
+        DrawFileList();
     }
     ImGui::EndChild();
 
@@ -155,3 +223,4 @@ void AssetBrowserPanel::Draw() {
 }
 
 } // namespace action
+
