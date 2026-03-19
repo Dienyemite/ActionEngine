@@ -37,7 +37,11 @@ public:
     
     // Set callback for delete action
     void SetDeleteCallback(DeleteCallback callback) { m_delete_callback = callback; }
-    
+
+    // Set callback invoked when the user requests a new C++ script file.
+    using CreateScriptCallback = std::function<void(const std::string&)>;
+    void SetCreateScriptCallback(CreateScriptCallback cb) { m_create_script_cb = std::move(cb); }
+
     bool visible = true;
     
 private:
@@ -67,6 +71,11 @@ private:
     bool   m_show_script_dialog  = false;
     char   m_script_class[128]   = {};
     char   m_script_filter[128]  = {};
+
+    // Create new script dialog state
+    bool                 m_show_create_script_dialog = false;
+    char                 m_new_script_name[64]       = {};
+    CreateScriptCallback m_create_script_cb;
 };
 
 } // namespace action

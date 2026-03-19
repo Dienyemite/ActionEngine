@@ -109,6 +109,9 @@ public:
     // This is the entry point used by the Asset Browser.
     void AddMeshFromFile(const std::string& path);
 
+    // Generate a C++ script template in game/scripts/ and open it in VS Code.
+    void CreateScriptFile(const std::string& script_name);
+
     void DeleteNode(u32 node_id);
     
     // Node access/modification for commands

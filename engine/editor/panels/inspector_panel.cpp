@@ -234,10 +234,16 @@ void InspectorPanel::DrawNodeProperties(EditorNode& node) {
 
         // Add Script button
         ImGui::Spacing();
-        if (ImGui::Button("+ Add Script", ImVec2(-1, 0))) {
+        float btn_w = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        if (ImGui::Button("+ Add Script", ImVec2(btn_w, 0))) {
             m_show_script_dialog = true;
             m_script_class[0]  = '\0';
             m_script_filter[0] = '\0';
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("+ New Script", ImVec2(btn_w, 0))) {
+            m_show_create_script_dialog = true;
+            m_new_script_name[0] = '\0';
         }
     }
 
@@ -296,6 +302,35 @@ void InspectorPanel::DrawNodeProperties(EditorNode& node) {
         ImGui::SameLine();
         if (ImGui::Button("Cancel", ImVec2(120, 0))) {
             m_script_class[0] = '\0';
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // ---- Create New Script modal ----
+    if (m_show_create_script_dialog) {
+        ImGui::OpenPopup("Create New Script");
+        m_show_create_script_dialog = false;
+    }
+    if (ImGui::BeginPopupModal("Create New Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Class name:");
+        ImGui::SetNextItemWidth(260);
+        bool enter = ImGui::InputText("##newscript", m_new_script_name, sizeof(m_new_script_name),
+                                      ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::Spacing();
+        ImGui::TextDisabled("A C++ header will be created in game/scripts/");
+        ImGui::TextDisabled("Edit it in VS Code, then rebuild the project.");
+        ImGui::Separator();
+
+        bool valid = (m_new_script_name[0] != '\0');
+        if (!valid) ImGui::BeginDisabled();
+        if (ImGui::Button("Create & Open in VS Code", ImVec2(200, 0)) || (enter && valid)) {
+            if (m_create_script_cb) m_create_script_cb(m_new_script_name);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!valid) ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel##cs", ImVec2(90, 0))) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();

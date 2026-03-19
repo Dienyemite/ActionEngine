@@ -2,6 +2,7 @@
 #include "core/logging.h"
 #include "core/math/math.h"
 #include "scripting/builtin_scripts.h"
+#include "game/scripts/register_user_scripts.h"
 
 int main() {
     using namespace action;
@@ -10,6 +11,7 @@ int main() {
     
     // Register all builtin scripts (PlayerController, etc.)
     RegisterBuiltinScripts();
+    RegisterUserScripts();  // User-created scripts from game/scripts/
     
     // Configure engine for GTX 660 + i5-6600K target
     EngineConfig config;
